@@ -1,0 +1,111 @@
+/* 暗色主题设计令牌。注意：全部 hex/rgba（html2canvas 不支持 oklch/color-mix 等现代色函数） */
+:root {
+  --bg: #0d0d0d;
+  --surface: #1a1a19;
+  --surface-2: #21211f;
+  --surface-3: #292926;
+  --border: #2c2c2a;
+  --axis: #383835;
+  --text: #ffffff;
+  --text-2: #c3c2b7;
+  --text-3: #898781;
+  --d-blue: #3987e5;
+  --d-blue-dim: rgba(57, 135, 229, 0.14);
+  --s-teal: #199e70;
+  --s-teal-dim: rgba(25, 158, 112, 0.14);
+  --good: #0ca30c;
+  --good-dim: rgba(12, 163, 12, 0.14);
+  --warning: #fab219;
+  --warning-dim: rgba(250, 178, 25, 0.14);
+  --critical: #d03b3b;
+  --critical-dim: rgba(208, 59, 59, 0.14);
+  --radius: 10px;
+  --radius-sm: 6px;
+  --shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
+  --font: -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+  --mono: "Consolas", "SFMono-Regular", monospace;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.6;
+  min-height: 100%;
+  /* 阻止内容替换（如报告页 loading → 完整页面）时浏览器自动滚动锚定导致的页面漂移 */
+  overflow-anchor: none;
+}
+
+body { padding-bottom: 48px; }
+
+a { color: var(--d-blue); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+h1 { font-size: 20px; font-weight: 600; }
+h2 { font-size: 16px; font-weight: 600; }
+h3 { font-size: 14px; font-weight: 600; }
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--surface-3); border-radius: 5px; }
+::-webkit-scrollbar-thumb:hover { background: var(--axis); }
+::-webkit-scrollbar-track { background: transparent; }
+
+/* 顶部导航 */
+#topbar {
+  position: sticky; top: 0; z-index: 50;
+  background: rgba(13, 13, 13, 0.92);
+  border-bottom: 1px solid var(--border);
+  backdrop-filter: blur(8px);
+}
+.topbar-inner {
+  max-width: 1240px; margin: 0 auto; padding: 10px 20px;
+  display: flex; align-items: center; justify-content: space-between;
+}
+.brand { display: flex; align-items: center; gap: 9px; cursor: pointer; user-select: none; }
+.brand-dot {
+  width: 10px; height: 10px; border-radius: 50%;
+  background: linear-gradient(135deg, var(--d-blue), var(--s-teal));
+}
+.brand-name { font-weight: 600; font-size: 15px; letter-spacing: 0.4px; }
+#topnav { display: flex; gap: 4px; }
+#topnav a {
+  color: var(--text-2); padding: 6px 14px; border-radius: var(--radius-sm);
+  font-size: 13px; transition: background 0.15s, color 0.15s;
+}
+#topnav a:hover { background: var(--surface-2); color: var(--text); text-decoration: none; }
+#topnav a.active { background: var(--surface-3); color: var(--text); }
+
+/* 页面容器 */
+#app { max-width: 1240px; margin: 0 auto; padding: 24px 20px; }
+.page-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 16px; margin-bottom: 20px; flex-wrap: wrap;
+}
+.page-head .title-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.page-title { font-size: 20px; font-weight: 600; }
+.page-sub { color: var(--text-3); font-size: 13px; }
+.page-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+
+.back-link {
+  display: inline-flex; align-items: center; gap: 6px;
+  color: var(--text-2); font-size: 13px; padding: 6px 12px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  transition: background 0.15s, color 0.15s;
+}
+.back-link:hover { background: var(--surface-2); color: var(--text); text-decoration: none; }
+
+/* 网格布局工具 */
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+@media (max-width: 960px) {
+  .grid-2 { grid-template-columns: 1fr; }
+  .grid-4 { grid-template-columns: repeat(2, 1fr); }
+}
+.mt-8 { margin-top: 8px; } .mt-16 { margin-top: 16px; } .mt-24 { margin-top: 24px; }
+.mb-8 { margin-bottom: 8px; } .mb-16 { margin-bottom: 16px; }
+.muted { color: var(--text-3); }
+.text-2 { color: var(--text-2); }
+.num { font-variant-numeric: tabular-nums; }
