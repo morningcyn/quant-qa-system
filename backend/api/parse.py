@@ -15,8 +15,9 @@ def preview(body: ParsePreviewIn, session: Session = Depends(get_db)):
     return {
         "fmt": result.fmt,
         "turns": [
-            {"turn_no": t.turn_no, "role": t.role, "text": t.text} for t in result.turns
+            {"turn_no": t.turn_no, "role": t.role, "speaker": t.speaker, "text": t.text} for t in result.turns
         ],
         "role_stats": result.role_stats,
+        "speakers": result.speakers,  # 助侧去重显示名（助理A/助理B…），供"本次评估对象"必选
         "warnings": result.warnings,
     }

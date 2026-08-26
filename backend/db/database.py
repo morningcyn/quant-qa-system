@@ -27,6 +27,10 @@ def _migrate() -> None:
         _ensure_column(conn, "assistants", "teacher_persona", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "inspections", "is_red_alert", "BOOLEAN NOT NULL DEFAULT 0")
         _ensure_column(conn, "inspections", "red_alert_reasons_json", "TEXT")
+        # 评估对象 + N/A 豁免（2026-08-26）
+        _ensure_column(conn, "inspections", "evaluatee", "VARCHAR(50)")
+        _ensure_column(conn, "inspections", "na_dims_json", "TEXT")
+        _ensure_column(conn, "inspections", "effective_max", "INTEGER")
         conn.commit()
 
 

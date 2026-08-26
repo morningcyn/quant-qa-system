@@ -1,10 +1,19 @@
-# 客服/投顾会话质检工具 - 后端配置常量与默认评分模板
+# 助理（投顾）会话质检工具 - 后端配置常量与默认评分模板
+import sys
 from pathlib import Path
 
-ROOT_DIR = Path(__file__).resolve().parent.parent
+if getattr(sys, "frozen", False):
+    # 打包运行（PyInstaller）：数据目录 = exe 同级 data/（可写、可备份、随包迁移）；
+    # 静态前端资源位于 PyInstaller 解压目录 _MEIPASS（只读）。
+    ROOT_DIR = Path(sys.executable).resolve().parent
+    FRONTEND_DIR = Path(getattr(sys, "_MEIPASS", ROOT_DIR)) / "frontend"
+else:
+    # 开发运行：项目根目录
+    ROOT_DIR = Path(__file__).resolve().parent.parent
+    FRONTEND_DIR = ROOT_DIR / "frontend"
+
 DATA_DIR = ROOT_DIR / "data"
 DB_PATH = DATA_DIR / "app.db"
-FRONTEND_DIR = ROOT_DIR / "frontend"
 
 APP_VERSION = "1.0.0"
 

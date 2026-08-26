@@ -8,16 +8,19 @@ from dataclasses import dataclass, field
 from backend.utils.errors import BizError
 
 # 客户侧角色词 → "客"；助理侧角色词 → "助"
-_CUSTOMER_WORDS = ("客", "客户", "客服", "顾客", "用户", "customer", "user", "K")
-_ASSISTANT_WORDS = ("助", "助手", "助理", "理财师", "投顾", "顾问", "老师", "assistant", "agent", "A")
+# 注意："客服"指客服人员（助理侧），用户口径禁止笼统"客服："，应规范为 助理A：/助理B：/客户：
+_CUSTOMER_WORDS = ("客", "客户", "顾客", "用户", "customer", "user", "K")
+_ASSISTANT_WORDS = ("助", "助手", "助理", "客服", "座席", "人工", "热线", "理财师", "投顾", "顾问", "老师", "assistant", "agent", "A")
 
 _ROLE_WORDS = _CUSTOMER_WORDS + _ASSISTANT_WORDS
 # 长词在前，避免 "客户" 被 "客" 抢先匹配
 _ROLE_ALT = "|".join(sorted(set(_ROLE_WORDS), key=len, reverse=True))
 
 # 行首角色标记：支持 [客] / 【客】 / (客) / 客： / 客: / "客" 等写法
+# 角色词后允许带显式编号/字母（客服A、助理2）→ 整体作为 speaker 原名保留（见 _assign_speakers）
+_NUM_SUFFIX = r"[A-Za-z0-9一二三四五六七八九十百千]+"
 _MARKER_RE = re.compile(
-    rf"^\s*(?:[\[【(（\"'']\s*)?(?P<role>{_ROLE_ALT})\s*(?:[\]】)）\"'']\s*|[:：]\s*)?(?P<text>.*)$",
+    rf"^\s*(?:[\[【(（\"'']\s*)?(?P<role>{_ROLE_ALT})(?P<suffix>{_NUM_SUFFIX})?\s*(?:[\]】)）\"'']\s*|[:：]\s*)?(?P<text>.*)$",
     re.IGNORECASE,
 )
 # 单独字母标记（K:/A:）必须带冒号，避免误伤普通行
@@ -38,6 +41,7 @@ _TEXT_HEADERS = {"内容", "消息", "对话", "正文", "content", "text", "mes
 @dataclass
 class Turn:
     role: str  # "客" | "助"
+    speaker: str  # 角色显性标识：客户 / 助理A / 助理B / 原名（含编号/人名的原始词保留）
     text: str
     turn_no: int
 
@@ -48,6 +52,7 @@ class ParseResult:
     warnings: list[str] = field(default_factory=list)
     role_stats: dict = field(default_factory=dict)
     fmt: str = "text"
+    speakers: list[str] = field(default_factory=list)  # 助侧去重显示名（按出现顺序），供选择"本次评估对象"
 
 
 class ParseError(BizError):
@@ -55,11 +60,21 @@ class ParseError(BizError):
         super().__init__("parse_failed", message, status_code=400)
 
 
+# 角色词后的数字/字母编号后缀（客服A、投顾2）→ 剥离后再匹配角色（CSV/JSON 用）
+_IDENT_SUFFIX_RE = re.compile(r"[A-Za-z0-9]+$")
+
+
 def normalize_role(raw: str) -> str | None:
     word = raw.strip().lower()
     for key, value in _ROLE_MAP.items():
         if word == key.lower():
             return value
+    m = _IDENT_SUFFIX_RE.search(word)
+    if m:
+        base = word[: m.start()]
+        for key, value in _ROLE_MAP.items():
+            if base == key.lower():
+                return value
     return None
 
 
@@ -121,7 +136,11 @@ def _parse_marker_text(text: str) -> ParseResult:
         elif match and match.group("role"):
             role_word, content = match.group("role"), match.group("text")
         if role_word and normalize_role(role_word):
-            turns.append(Turn(role=normalize_role(role_word), text=content.strip(), turn_no=len(turns) + 1))
+            suffix = match.group("suffix") if match else None
+            speaker = role_word.strip() + (suffix or "")
+            turns.append(
+                Turn(role=normalize_role(role_word), speaker=speaker, text=content.strip(), turn_no=len(turns) + 1)
+            )
             continue
         if turns:
             turns[-1].text = f"{turns[-1].text}\n{line}".strip()  # 换行续写并入上一轮
@@ -172,7 +191,7 @@ def _parse_csv(text: str) -> ParseResult:
         if not content:
             skipped += 1
             continue
-        turns.append(Turn(role=role, text=content, turn_no=len(turns) + 1))
+        turns.append(Turn(role=role, speaker=str(row[role_idx]).strip(), text=content, turn_no=len(turns) + 1))
     result = ParseResult(turns=turns, fmt="csv")
     if skipped:
         result.warnings.append(f"{skipped} 行因角色无法识别或内容为空被跳过")
@@ -204,7 +223,7 @@ def _parse_json(text: str) -> ParseResult:
             raise ParseError(f"JSON 第 {i + 1} 项角色「{role_raw}」无法识别（支持 客/助/客户/customer/assistant 等）")
         content = str(text_raw).strip()
         if content:
-            turns.append(Turn(role=role, text=content, turn_no=len(turns) + 1))
+            turns.append(Turn(role=role, speaker=str(role_raw).strip(), text=content, turn_no=len(turns) + 1))
     result = ParseResult(turns=turns, fmt="json")
     if not turns:
         raise ParseError("JSON 中没有可识别的对话内容")
@@ -214,8 +233,34 @@ def _parse_json(text: str) -> ParseResult:
 
 # ---------- 防呆校验与规范化 ----------
 
+# 纯角色词集合（无编号无人名）→ 按出现顺序编号为 助理A/助理B…；已带编号/人名的（助理A、客服2、小李）保留原名
+_ASSISTANT_PLAIN_WORDS = frozenset(w.lower() for w in _ASSISTANT_WORDS)
+
+
+def _assign_speakers(turns: list[Turn]) -> None:
+    """角色显性标识：客户侧统一"客户"；助理侧纯角色词按出现顺序编号（同一原始词复用同一编号）。"""
+    counter = 0
+    assigned: dict[str, str] = {}
+    for t in turns:
+        if t.role == "客":
+            t.speaker = "客户"
+            continue
+        raw = t.speaker.strip()
+        if raw.lower() in _ASSISTANT_PLAIN_WORDS:
+            if raw not in assigned:
+                counter += 1
+                assigned[raw] = f"助理{chr(64 + counter)}"
+            t.speaker = assigned[raw]
+
+
 def _finalize(result: ParseResult, raw_text: str) -> None:
     turns = result.turns
+    _assign_speakers(turns)
+    result.speakers = list(dict.fromkeys(t.speaker for t in turns if t.role == "助"))
+    if len(result.speakers) > 1:
+        result.warnings.append(
+            f"检测到多位助理发言（{'、'.join(result.speakers)}），请确认本次评估对象，仅对指定助理计分"
+        )
     result.role_stats = {
         "客": sum(1 for t in turns if t.role == "客"),
         "助": sum(1 for t in turns if t.role == "助"),
@@ -249,8 +294,8 @@ def _finalize(result: ParseResult, raw_text: str) -> None:
 
 
 def to_numbered_text(turns: list[Turn], max_chars: int | None = None) -> str:
-    """生成送模型的规范文本 [1][客] ...，保证 highlight 的 turn 可对齐。"""
-    lines = [f"[{t.turn_no}][{t.role}] {t.text}" for t in turns]
+    """生成送模型的规范文本 [1][客户] / [2][助理A] ...，角色显性标识，保证 highlight 的 turn 可对齐。"""
+    lines = [f"[{t.turn_no}][{t.speaker}] {t.text}" for t in turns]
     text = "\n".join(lines)
     if max_chars and len(text) > max_chars:
         text = text[:max_chars] + "\n...(内容过长已截断)"
@@ -266,7 +311,7 @@ def summarize_long_dialogue(turns: list[Turn], keep_head: int = 10, keep_tail: i
     mid_lines = []
     for t in turns[keep_head:-keep_tail]:
         summary = t.text[:60].replace("\n", " ") + ("…" if len(t.text) > 60 else "")
-        mid_lines.append(f"[{t.turn_no}][{t.role}]（摘要）{summary}")
+        mid_lines.append(f"[{t.turn_no}][{t.speaker}]（摘要）{summary}")
     return "\n".join(
         [to_numbered_text(head)] + mid_lines + [to_numbered_text(tail)]
     ) + "\n（注：中间轮次已压缩为摘要，请主要依据头尾全文评分）"

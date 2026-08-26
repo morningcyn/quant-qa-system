@@ -48,6 +48,11 @@ class Inspection(Base):
     template_snapshot_json: Mapped[str] = mapped_column(Text, nullable=False)
     turn_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     customer_profile: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    # 本次评估对象（如 助理A）；多角色对话只对该对象计分，其余角色为上下文背景
+    evaluatee: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    # N/A 豁免维度 [{key, name, reason, max}] 与动态分母（满分 100 − Σ豁免维度满分）
+    na_dims_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    effective_max: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.now)
 
     assistant: Mapped["Assistant"] = relationship(back_populates="inspections")

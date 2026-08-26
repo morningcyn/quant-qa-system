@@ -145,6 +145,39 @@ class TestPipeline:
         detail = repository.get_inspection_detail(session, inspection.id)
         assert detail.highlight_dialogue_json
 
+    def test_evaluatee_injected_and_saved(self, session, assistant):
+        """评估对象锁定：prompt 注入「本次评估对象」且落库。"""
+        client = MockLLMClient([valid_llm_json()])
+        dialogue = "[客服A] 您好，有什么可以帮您？\n[客户] 我的基金亏了。\n[客服B] 我来帮您查询。\n[客户] 好的。"
+        asyncio.run(
+            pipeline.run_inspection(session, assistant.id, dialogue, client=client, cfg={}, evaluatee="客服B")
+        )
+        assert "本次评估对象：客服B" in client.calls[0]["user"]
+        inspection = repository.list_inspections(session, assistant_id=assistant.id)[0][0]
+        assert inspection.evaluatee == "客服B"
+
+    def test_evaluatee_fallback_to_first_speaker(self, session, assistant):
+        """前端未传评估对象 → 后端按唯一/首个助理推导（兜底不阻塞）。"""
+        client = MockLLMClient([valid_llm_json()])
+        dialogue = "[客服A] 您好。\n[客户] 你好。\n[客服B] 请问怎么称呼？"
+        inspection = asyncio.run(pipeline.run_inspection(session, assistant.id, dialogue, client=client, cfg={}))
+        assert inspection.evaluatee == "客服A"
+
+    def test_na_saved_with_inspection(self, session, assistant):
+        """N/A 豁免落库：na_dims_json / effective_max / 折算总分 / evaluatee。"""
+        import json as _json
+
+        data = _json.loads(valid_llm_json())
+        data["d_scores"]["d2_profile_match"] = {"score": None, "na_reason": "客户未表达情绪"}
+        client = MockLLMClient([_json.dumps(data, ensure_ascii=False)])
+        inspection = asyncio.run(pipeline.run_inspection(session, assistant.id, SAMPLE_DIALOGUE, client=client, cfg={}))
+        assert inspection.effective_max == 85  # 100 − D2 的 15 分
+        na = _json.loads(inspection.na_dims_json)
+        assert na[0]["key"] == "d2"
+        # 原始维度合计 57 → 57/85 → 67
+        assert inspection.total_score == round(57 / 85 * 100)
+        assert inspection.evaluatee == "助理A"
+
     def test_all_fail_raises_llm_failed(self, session, assistant):
         client = MockLLMClient(["坏JSON"] * 8)
         with pytest.raises(BizError) as excinfo:

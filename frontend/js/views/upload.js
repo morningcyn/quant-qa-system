@@ -113,6 +113,16 @@
       try {
         const data = await API.post("/api/parse/preview", { raw_text: text });
         const preview = form.querySelector("#u-preview");
+        const speakers = data.speakers || [];
+        // 本次评估对象（必选）：多角色对话只对指定助理计分，其余角色视为上下文背景
+        const evaluateeRow = speakers.length
+          ? `<div class="form-row mt-16" style="margin-bottom:0">
+              <label class="form-label">本次评估对象 <span style="color:var(--critical)">*</span>（仅对该对象计分，其余角色为上下文背景）</label>
+              <select class="select" id="u-evaluatee">
+                ${speakers.map((s) => `<option value="${UI.esc(s)}">${UI.esc(s)}</option>`).join("")}
+              </select>
+            </div>`
+          : "";
         preview.style.display = "";
         preview.innerHTML = `
           <div class="alert ${data.warnings.length ? "alert-warning" : "alert-info"} mb-8">
@@ -120,11 +130,12 @@
             <div>${data.warnings.length ? data.warnings.map((w) => `<div>· ${UI.esc(w)}</div>`).join("") : "格式识别正常，可以开始质检"}
             <div style="margin-top:4px;color:var(--text-2)">共识别 ${data.role_stats.total} 轮（客户 ${data.role_stats["客"] || 0} 轮 / 助理 ${data.role_stats["助"] || 0} 轮）· 格式：${UI.esc(data.fmt)}</div></div>
           </div>
-          <div style="max-height:300px;overflow-y:auto">
+          ${evaluateeRow}
+          <div class="mt-8" style="max-height:300px;overflow-y:auto">
             ${data.turns.slice(0, 50).map((t) => `
               <div class="turn-bubble ${t.role === "客" ? "customer" : "assistant"}">
                 <span class="turn-no num">#${t.turn_no}</span>
-                <div class="bubble">${UI.esc(t.text.length > 200 ? t.text.slice(0, 200) + "…" : t.text)}</div>
+                <div class="bubble">${UI.esc(t.speaker || "")}：${UI.esc(t.text.length > 200 ? t.text.slice(0, 200) + "…" : t.text)}</div>
               </div>`).join("")}
             ${data.turns.length > 50 ? `<div class="muted" style="text-align:center">… 仅预览前 50 轮</div>` : ""}
           </div>`;
@@ -144,6 +155,12 @@
 
   async function doSubmit(assistant, form, modal, title) {
     const raw = form.querySelector("#u-text").value.trim();
+    const evaluateeSel = form.querySelector("#u-evaluatee");
+    const evaluatee = evaluateeSel ? evaluateeSel.value.trim() : "";
+    if (!evaluatee) {
+      UI.toast("请先解析预览并选择本次评估对象", "warning");
+      return;
+    }
     const bodyEl = modal.body;
     const controller = new AbortController();
     let stageTimer = null;
@@ -162,7 +179,7 @@
       const resp = await fetch(`/api/assistants/${assistant.id}/inspections`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ session_title: title || null, raw_dialogue: raw }),
+        body: JSON.stringify({ session_title: title || null, raw_dialogue: raw, evaluatee }),
         signal: controller.signal,
       });
       const data = await resp.json().catch(() => null);

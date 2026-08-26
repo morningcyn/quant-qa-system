@@ -78,6 +78,9 @@ def save_inspection(
     s_scores: dict | None = None,
     highlight_dialogue: list[dict] | None = None,
     suggestions: list[str] | None = None,
+    evaluatee: str | None = None,
+    na_dims: list[dict] | None = None,
+    effective_max: int | None = None,
 ) -> Inspection:
     inspection = Inspection(
         assistant_id=assistant_id,
@@ -91,6 +94,9 @@ def save_inspection(
         template_snapshot_json=json.dumps(template_snapshot, ensure_ascii=False),
         turn_count=turn_count,
         customer_profile=customer_profile,
+        evaluatee=evaluatee,
+        na_dims_json=json.dumps(na_dims or [], ensure_ascii=False),
+        effective_max=effective_max,
     )
     session.add(inspection)
     session.flush()

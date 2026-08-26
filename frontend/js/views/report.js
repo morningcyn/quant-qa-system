@@ -22,7 +22,23 @@
     return `<div class="progress"><span class="${barCls}" style="width:${pct}%"></span></div>`;
   }
 
+  // N/A 豁免维度：score 为 null 时整卡显示"无法判定"，不渲染进度条（进度条组件在调用方按 isNa 跳过）
+  function isNa(data) {
+    return !data || data.score == null;
+  }
+
   function dDimCard(key, conf, data, color) {
+    const na = isNa(data);
+    if (na) {
+      return `
+        <div class="dim-card">
+          <div class="dim-head">
+            <span class="dim-name" style="color:${color}">${key.toUpperCase()} ${UI.esc(conf.name)}</span>
+            <span class="dim-score" style="color:var(--text-3)">N/A 无法判定</span>
+          </div>
+          <div class="dim-comment">${UI.esc(data.na_reason || "该维度因文本信息不足未评分（已从总分分母中豁免，按得分率折算）")}</div>
+        </div>`;
+    }
     const extra = [];
     if (data.rating) extra.push(`<span class="badge badge-blue">${UI.esc(data.rating)}</span>`);
     if (key === "d2_profile_match" && data.profile) extra.push(`<span class="badge badge-neutral">画像：${UI.esc(data.profile)}</span>`);
@@ -53,6 +69,17 @@
   }
 
   function sDimCard(key, conf, data, color) {
+    const na = isNa(data);
+    if (na) {
+      return `
+        <div class="dim-card">
+          <div class="dim-head">
+            <span class="dim-name" style="color:${color}">${key.toUpperCase()} ${UI.esc(key === "s1" ? S1_NAME : conf.name)}</span>
+            <span class="dim-score" style="color:var(--text-3)">N/A 无法判定</span>
+          </div>
+          <div class="dim-comment">${UI.esc(data.na_reason || "该维度因文本信息不足未评分（子项一并豁免，已从总分分母中扣除）")}</div>
+        </div>`;
+    }
     const subRows = Object.keys(conf.sub_items || {})
       .map((subKey) => {
         const subConf = conf.sub_items[subKey];
@@ -86,6 +113,12 @@
     const sConf = tpl.s || {};
     const d = r.d_scores || {};
     const s = r.s_scores || {};
+    // N/A 豁免维度（key 短键集合）+ 折算说明
+    const naDims = r.na_dims || [];
+    const naKeys = new Set(naDims.map((nd) => nd.key));
+    const naNote = naDims.length
+      ? `（已豁免：${naDims.map((nd) => UI.esc(nd.name)).join("、")}）`
+      : "";
     // 状态优先级：红灯（合规一票否决）> 黄灯（业务瑕疵）> 正常
     const statusBadge = r.is_red_alert
       ? `<span class="badge badge-critical">🚫 红灯拦截（合规违规）</span>`
@@ -93,6 +126,10 @@
         ? `<span class="badge badge-warning">⚠️ 黄灯预警</span>`
         : `<span class="badge badge-good">✔ 正常</span>`;
     const heroScore = r.is_red_alert ? "critical" : r.is_yellow_alert ? "warning" : "good";
+    // N/A 豁免：总分按有效维度得分率折算（如 62/88 → 70），这里展示折算依据
+    const convertNote = r.effective_max && r.effective_max < 100 && r.effective_score != null
+      ? `<div style="font-size:12px;color:var(--text-3)">折算自 ${r.effective_score}/${r.effective_max}（豁免 ${r.na_dims.length} 个无法判定维度）</div>`
+      : "";
     const redAlertHtml = r.is_red_alert && r.red_alert_reasons && r.red_alert_reasons.length
       ? `<div class="alert alert-critical mt-16"><div>🚫</div><div><b>红灯一票否决：命中合规红线</b><ul>${r.red_alert_reasons.map((x) => `<li>${UI.esc(x)}</li>`).join("")}</ul></div></div>`
       : "";
@@ -158,21 +195,23 @@
             <div>${statusBadge}</div>
             <div class="hero-tags">
               ${r.customer_profile ? `<span class="tag">👤 客户画像：${UI.esc(r.customer_profile)}</span>` : ""}
+              ${r.evaluatee ? `<span class="tag">🎯 评估对象：${UI.esc(r.evaluatee)}</span>` : ""}
               <span class="tag">📋 质检模板：${UI.esc(r.template_name)}</span>
               <span class="tag">💬 对话轮数：${r.turn_count} 轮</span>
             </div>
           </div>
+          ${convertNote}
         </div>
         ${redAlertHtml}
         ${alertHtml}
 
         <div class="grid-2 mt-16">
           <div class="card">
-            <div class="card-title">D 端能力雷达（满分 ${(tpl.d ? Object.values(tpl.d).reduce((a, b) => a + b.max, 0) : 55)}）</div>
+            <div class="card-title">D 端能力雷达（满分 ${(tpl.d ? Object.values(tpl.d).reduce((a, b) => a + b.max, 0) : 55)}）${naDims.filter((nd) => nd.key.startsWith("d")).length ? `<span class="muted" style="font-size:11px">已豁免：${naDims.filter((nd) => nd.key.startsWith("d")).map((nd) => UI.esc(nd.name)).join("、")}</span>` : ""}</div>
             <div id="radar-d" class="chart-box"></div>
           </div>
           <div class="card">
-            <div class="card-title">S 端能力雷达（满分 ${(tpl.s ? Object.values(tpl.s).reduce((a, b) => a + b.max, 0) : 45)}）</div>
+            <div class="card-title">S 端能力雷达（满分 ${(tpl.s ? Object.values(tpl.s).reduce((a, b) => a + b.max, 0) : 45)}）${naDims.filter((nd) => nd.key.startsWith("s")).length ? `<span class="muted" style="font-size:11px">已豁免：${naDims.filter((nd) => nd.key.startsWith("s")).map((nd) => UI.esc(nd.name)).join("、")}</span>` : ""}</div>
             <div id="radar-s" class="chart-box"></div>
           </div>
         </div>
@@ -213,12 +252,14 @@
         </div>
       </div>`;
 
-    // 雷达图
+    // 雷达图（N/A 豁免维度剔除指标，避免 null 破坏雷达图形）
     if (window.echarts) {
-      const dInd = ["d1", "d2", "d3", "d4"].map((k) => ({ name: (dConf[k] || {}).name || k, max: (dConf[k] || {}).max || 10 }));
-      const dVals = ["d1", "d2", "d3", "d4"].map((k) => ({ value: (pickScore(d, k).score) || 0 }));
-      const sInd = ["s1", "s2", "s3"].map((k) => ({ name: (k === "s1" ? S1_NAME : (sConf[k] || {}).name) || k, max: (sConf[k] || {}).max || 15 }));
-      const sVals = ["s1", "s2", "s3"].map((k) => ({ value: (pickScore(s, k).score) || 0 }));
+      const dKeys = ["d1", "d2", "d3", "d4"].filter((k) => !naKeys.has(k));
+      const sKeys = ["s1", "s2", "s3"].filter((k) => !naKeys.has(k));
+      const dInd = dKeys.map((k) => ({ name: (dConf[k] || {}).name || k, max: (dConf[k] || {}).max || 10 }));
+      const dVals = dKeys.map((k) => ({ value: (pickScore(d, k).score) || 0 }));
+      const sInd = sKeys.map((k) => ({ name: (k === "s1" ? S1_NAME : (sConf[k] || {}).name) || k, max: (sConf[k] || {}).max || 15 }));
+      const sVals = sKeys.map((k) => ({ value: (pickScore(s, k).score) || 0 }));
       Charts.renderRadar(document.getElementById("radar-d"), dInd, [{ name: "D端得分", values: dVals, color: C.dBlue }]);
       Charts.renderRadar(document.getElementById("radar-s"), sInd, [{ name: "S端得分", values: sVals, color: C.sTeal }]);
     }

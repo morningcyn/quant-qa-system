@@ -18,6 +18,7 @@ class AssistantUpdate(BaseModel):
 class InspectionCreate(BaseModel):
     session_title: str | None = Field(default=None, max_length=200)
     raw_dialogue: str = Field(min_length=1)
+    evaluatee: str | None = Field(default=None, max_length=50, description="本次评估对象（如 助理A）；为空时后端按唯一助理推导")
 
 
 class ParsePreviewIn(BaseModel):

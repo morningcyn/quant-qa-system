@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 
 from backend.config import DEFAULT_TEMPLATES
 from backend.db import repository
-from backend.schemas.inspection import LLMResultSchema
+from backend.schemas.inspection import LLMResultSchema, MAX_NA_DIMS
 from backend.services import parser as parser_service
 
 D_TOTAL = 55
@@ -68,6 +68,17 @@ def render_rulebook(template: dict) -> str:
         lines.append(f"#### {key.upper()} {dim['name']}（满分 {dim['max']} 分）子项：{subs}")
         lines.append(f"- 评分要点：{S_DIM_DESCRIPTIONS.get(key, '')}")
         lines.append("")
+    lines.append("### N/A 豁免（无法判定机制）")
+    lines.append(
+        "- 你接收到的是一段对话切片：若某维度因文本信息不足而无法判定"
+        "（如客户未表达情绪、无相关对话内容），该维度输出 \"score\": null 并附 na_reason"
+        " 说明原因，**禁止强行打 0 分**。"
+    )
+    lines.append(
+        f"- 单次最多豁免 {MAX_NA_DIMS} 个维度；豁免维度从总分分母中扣除，"
+        "最终成绩按实际评估维度的得分率折算为百分制（如豁免 D2 15 分 → 按 85 分满分折算），保证分数公平。"
+    )
+    lines.append("")
     return "\n".join(lines)
 
 
@@ -89,35 +100,55 @@ def _s_items(result: LLMResultSchema):
 
 
 def apply_guardrails(result: LLMResultSchema, template: dict, turn_count: int) -> LLMResultSchema:
-    """输出侧校核：越界钳制、S 维度分=Σ子项（算术剥离）、总分与熔断重算、红灯补全、建议裁剪、高亮过滤排序。"""
-    # D 端：分数钳制到 [0, max]（analysis 为思维链文本，原样保留）
+    """输出侧校核：越界钳制、S 维度分=Σ子项（算术剥离）、N/A 豁免与动态分母折算、
+    总分与熔断重算、红灯补全、建议裁剪、高亮过滤排序。
+    na_dims / effective_max 作为附加属性挂在 result 上（不进入 schema 落库字段）。"""
+    na_dims: list[dict] = []
+    # D 端：N/A 维度豁免（不钳制、不计分）；正常维度钳制到 [0, max]
     for key, item in _d_items(result):
-        dim_max = int(template["d"].get(key, {}).get("max", 0))
+        dim = template["d"].get(key, {})
+        dim_max = int(dim.get("max", 0))
+        if item.score is None:
+            na_dims.append({"key": key, "name": dim.get("name", key), "reason": item.na_reason or "无法判定", "max": dim_max})
+            continue
         item.score = max(0, min(int(item.score), dim_max))
-    # S 端：子项钳制；维度分 = Σ子项（模型给的值被覆盖——算术由后端接管，不信任模型汇总）
+    # S 端：维度 N/A → 整体豁免（子项忽略）；正常 → 子项钳制并求和（null 子项视为未提供按 0）
     for key, item in _s_items(result):
         dim = template["s"].get(key, {})
         dim_max = int(dim.get("max", 0))
+        if item.score is None:
+            na_dims.append({"key": key, "name": dim.get("name", key), "reason": item.na_reason or "无法判定", "max": dim_max})
+            continue
         sub_scores = []
         for sub_key, sub_conf in (dim.get("sub_items") or {}).items():
             sub_item = getattr(item.sub_items, sub_key, None)
-            if sub_item is None:
+            if sub_item is None or sub_item.score is None:
                 continue
             sub_item.score = max(0, min(int(sub_item.score), int(sub_conf.get("max", 0))))
             sub_scores.append(sub_item.score)
         item.score = min(dim_max, sum(sub_scores))
-    # 总分与熔断强制重算（不信任模型算术）
-    d_total = sum(item.score for _, item in _d_items(result))
-    s_total = sum(item.score for _, item in _s_items(result))
-    result.total_score = d_total + s_total
+    # 总分与熔断强制重算（不信任模型算术）：N/A 维度从分母扣除，按得分率折算百分制
+    d_total = sum(item.score for _, item in _d_items(result) if item.score is not None)
+    s_total = sum(item.score for _, item in _s_items(result) if item.score is not None)
+    effective_max = 100 - sum(int(nd["max"]) for nd in na_dims)
+    result.effective_max = effective_max  # 供 pipeline 落库与报告展示
+    result.na_dims = na_dims
+    if effective_max <= 0:
+        result.total_score = 0  # 全部维度豁免的极端情况
+    else:
+        result.total_score = round((d_total + s_total) / effective_max * 100)
     threshold = int(template.get("yellow_threshold", 59))
     result.is_yellow_alert = result.total_score < threshold
     if result.is_yellow_alert and not result.yellow_alert_reasons:
         losses = []
         for key, item in _d_items(result):
+            if item.score is None:
+                continue  # N/A 维度不参与失分统计
             dim_max = int(template["d"].get(key, {}).get("max", 0))
             losses.append((dim_max - item.score, key.upper(), template["d"][key]["name"], item.score, dim_max))
         for key, item in _s_items(result):
+            if item.score is None:
+                continue
             dim_max = int(template["s"].get(key, {}).get("max", 0))
             losses.append((dim_max - item.score, key.upper(), template["s"][key]["name"], item.score, dim_max))
         losses.sort(reverse=True)

@@ -36,8 +36,31 @@ class TestMarkerText:
     def test_numbered_text(self):
         result = parse_raw("[客] 你好\n[助] 您好")
         text = to_numbered_text(result.turns)
-        assert "[1][客] 你好" in text
-        assert "[2][助] 您好" in text
+        assert "[1][客户] 你好" in text
+        assert "[2][助理A] 您好" in text
+
+    def test_speaker_assignment(self):
+        # 客户侧统一为"客户"；助侧纯角色词按出现顺序编号为 助理A/助理B
+        result = parse_raw("[客] 你好\n[助] 您好\n[投顾] 有什么可以帮您？")
+        assert result.speakers == ["助理A", "助理B"]
+        assert [t.speaker for t in result.turns] == ["客户", "助理A", "助理B"]
+
+    def test_speaker_numbering_keeps_named(self):
+        # 已带编号/人名的角色词保留原样；同一原始词复用同编号
+        result = parse_raw("[客服A] 您好\n[客服B] 我在\n[客服A] 好的")
+        assert result.speakers == ["客服A", "客服B"]
+        assert [t.speaker for t in result.turns] == ["客服A", "客服B", "客服A"]
+
+    def test_kefu_is_assistant_side(self):
+        # "客服" 属于助理侧（客服人员），不再是客户角色词
+        result = parse_raw("[客服] 您好\n[客户] 在吗\n[客服] 在的")
+        assert [t.role for t in result.turns] == ["助", "客", "助"]
+        assert result.speakers == ["助理A"]
+        assert result.turns[0].speaker == "助理A"
+
+    def test_multi_assistant_warning(self):
+        result = parse_raw("[投顾] 您好\n[顾问] 您好")
+        assert any("多位助理" in w for w in result.warnings)
 
 
 class TestCsv:
@@ -71,5 +94,5 @@ class TestLongDialogue:
         result = parse_raw("\n".join(f"[{('客' if i % 2 == 0 else '助')}] 第{i}轮内容" for i in range(80)))
         text = summarize_long_dialogue(result.turns)
         assert "（摘要）" in text
-        assert "[1][客]" in text
-        assert "[80][助]" in text
+        assert "[1][客户]" in text
+        assert "[80][助理A]" in text

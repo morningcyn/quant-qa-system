@@ -27,6 +27,25 @@ def build_report_view(session: Session, inspection: Inspection) -> dict:
     highlight = _loads(detail.highlight_dialogue_json, []) if detail else []
     suggestions = _loads(detail.suggestions_json, []) if detail else []
     snapshot = _loads(inspection.template_snapshot_json, {})
+    na_dims = _loads(inspection.na_dims_json, [])
+    # 折算前的有效得分（非 N/A 维度得分合计），供报告页展示"得分 X / 有效满分 Y → 折算总分"
+    effective_score = None
+    if na_dims:
+        na_keys = {nd.get("key") for nd in na_dims}
+        eff = 0
+        for key, field in _D_FIELD_KEYS.items():
+            if key in na_keys:
+                continue
+            s = (d_scores.get(field) or {}).get("score")
+            if isinstance(s, (int, float)):
+                eff += s
+        for key, field in _S_FIELD_KEYS.items():
+            if key in na_keys:
+                continue
+            s = (s_scores.get(field) or {}).get("score")
+            if isinstance(s, (int, float)):
+                eff += s
+        effective_score = round(eff, 1)
     return {
         "id": inspection.id,
         "assistant_id": inspection.assistant_id,
@@ -43,6 +62,10 @@ def build_report_view(session: Session, inspection: Inspection) -> dict:
         "template_snapshot": snapshot,
         "turn_count": inspection.turn_count,
         "customer_profile": inspection.customer_profile,
+        "evaluatee": inspection.evaluatee,
+        "na_dims": na_dims,
+        "effective_max": inspection.effective_max,
+        "effective_score": effective_score,
         "created_at": inspection.created_at.isoformat(sep=" ", timespec="seconds"),
         "d_scores": d_scores,
         "s_scores": s_scores,
@@ -129,13 +152,19 @@ def top3_loss(session: Session, assistant_id: int, days: int = 30) -> dict:
         snapshot = _loads(inspection.template_snapshot_json, {})
         d_scores = _loads(detail.d_scores_json, {})
         s_scores = _loads(detail.s_scores_json, {})
+        # N/A 豁免维度不参与失分统计（score 为 null 的维度天然不计，这里显式排除防异常数据）
+        na_keys = {nd.get("key") for nd in _loads(inspection.na_dims_json, [])}
         for key, field in _D_FIELD_KEYS.items():
+            if key in na_keys:
+                continue
             conf = (snapshot.get("d") or {}).get(key, {})
             if not conf:
                 continue
             score = (d_scores.get(field) or {}).get("score")
             _item_loss_accumulate(key, conf.get("name", key), score, int(conf.get("max", 0)), dim_agg)
         for key, field in _S_FIELD_KEYS.items():
+            if key in na_keys:
+                continue
             conf = (snapshot.get("s") or {}).get(key, {})
             if not conf:
                 continue

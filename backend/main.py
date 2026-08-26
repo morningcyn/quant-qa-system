@@ -18,7 +18,7 @@ async def lifespan(app: FastAPI):
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="客服会话质检助手", lifespan=lifespan, docs_url=None, redoc_url=None)
+    app = FastAPI(title="助理会话质检助手", lifespan=lifespan, docs_url=None, redoc_url=None)
     register_error_handlers(app)
     app.include_router(api_router)
 

@@ -16,7 +16,7 @@ async def create_inspection(
     assistant_id: int, body: InspectionCreate, session: Session = Depends(get_db)
 ):
     inspection = await pipeline.run_inspection(
-        session, assistant_id, body.raw_dialogue, body.session_title
+        session, assistant_id, body.raw_dialogue, body.session_title, body.evaluatee
     )
     return report.build_report_view(session, inspection)
 

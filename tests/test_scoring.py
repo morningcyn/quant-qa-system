@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from backend.config import DEFAULT_TEMPLATES
 from backend.schemas.inspection import LLMResultSchema
 from backend.services.prompts import build_scoring_only_system, build_system_prompt
@@ -217,6 +219,108 @@ class TestGuardrails:
         )
         apply_guardrails(result, _template(), turn_count=10)
         assert len(result.improvement_suggestions) == 3
+
+    # ---------- N/A 豁免（防呆：无法判定 → null + 动态分母折算） ----------
+
+    def test_na_dimension_deducted_from_denominator(self):
+        # D2 无法判定（客户未表达情绪）→ 豁免 15 分：分母 85，其余满分 → 折算 100
+        data = _base_result()
+        data["d_scores"]["d2_profile_match"] = {"score": None, "na_reason": "客户未表达情绪"}
+        result = _result_from_json(json.dumps(data, ensure_ascii=False))
+        apply_guardrails(result, _template(), turn_count=10)
+        assert result.effective_max == 85
+        assert result.na_dims == [{"key": "d2", "name": "画像匹配", "reason": "客户未表达情绪", "max": 15}]
+        assert result.d_scores.d2_profile_match.score is None  # 原样保留，严禁被钳制为 0
+        assert result.total_score == 100
+        assert not result.is_yellow_alert
+
+    def test_na_prorated_score(self):
+        # 豁免 D2（分母 85）后按得分率折算：61/85 → 72（round(71.76)）
+        data = _base_result()
+        data["d_scores"] = {
+            "d1_emotion_change": {"score": 7},
+            "d2_profile_match": {"score": None, "na_reason": "无情绪对话"},
+            "d3_problem_match": {"score": 10},
+            "d4_expectation_exceed": {"score": 9},
+        }
+        data["s_scores"] = {
+            "s1_emotion_stabilize": {"sub_items": {"empathy": 4, "customized": 3, "direct": 2, "no_conflict": 4, "vent_guide": 2}},
+            "s2_problem_closure": {"sub_items": {"completeness": 3, "structure": 3, "next_step": 2, "follow_up": 4}},
+            "s3_professional_supply": {"sub_items": {"logic": 3, "explain_why": 2, "decision_ownership": 3}},
+        }
+        result = _result_from_json(json.dumps(data, ensure_ascii=False))
+        apply_guardrails(result, _template(), turn_count=10)
+        # 有效得分 = (7+10+9) + 15 + 12 + 8 = 61 → 61/85 ≈ 71.8 → 72
+        assert result.effective_max == 85
+        assert result.total_score == 72
+        assert not result.is_yellow_alert
+
+    def test_na_yellow_by_prorated_score(self):
+        # 豁免 D1（分母 90）后得分率仍低 → 黄灯按折算后百分制判断
+        data = _base_result()
+        data["d_scores"] = {
+            "d1_emotion_change": {"score": None, "na_reason": "无情绪表达"},
+            "d2_profile_match": {"score": 15},
+            "d3_problem_match": {"score": 15},
+            "d4_expectation_exceed": {"score": 15},
+        }
+        data["s_scores"] = {
+            "s1_emotion_stabilize": {"sub_items": {"empathy": 1, "customized": 1, "direct": 0, "no_conflict": 0, "vent_guide": 0}},
+            "s2_problem_closure": {"sub_items": {"completeness": 1, "structure": 0, "next_step": 0, "follow_up": 1}},
+            "s3_professional_supply": {"sub_items": {"logic": 1, "explain_why": 0, "decision_ownership": 0}},
+        }
+        result = _result_from_json(json.dumps(data, ensure_ascii=False))
+        apply_guardrails(result, _template(), turn_count=10)
+        # 有效得分 = 45 + 2 + 2 + 1 = 50 → 50/90 ≈ 55.6 → 56 < 59 → 黄灯
+        assert result.effective_max == 90
+        assert result.total_score == round(50 / 90 * 100)
+        assert result.is_yellow_alert is True
+        assert result.yellow_alert_reasons
+        assert all("情绪转化" not in r for r in result.yellow_alert_reasons)  # N/A 维度不进失分统计
+
+    def test_na_reason_required(self):
+        # score=null 但没给 na_reason → schema 校验失败（触发既有 json_guard 重试）
+        with pytest.raises(ValueError):
+            _result_from_json(
+                '{"total_score": 0, "is_red_alert": false, "red_alert_reasons": [],'
+                ' "is_yellow_alert": false, "yellow_alert_reasons": [],'
+                ' "d_scores": {"d1_emotion_change": {"score": null}, "d2_profile_match": {"score": 15},'
+                ' "d3_problem_match": {"score": 15}, "d4_expectation_exceed": {"score": 15}},'
+                ' "s_scores": {"s1_emotion_stabilize": {"sub_items": {"empathy": 4, "customized": 5, "direct": 4, "no_conflict": 5, "vent_guide": 2}},'
+                ' "s2_problem_closure": {"sub_items": {"completeness": 4, "structure": 4, "next_step": 3, "follow_up": 4}},'
+                ' "s3_professional_supply": {"sub_items": {"logic": 4, "explain_why": 3, "decision_ownership": 3}}}}'
+            )
+
+    def test_na_limit_two_max(self):
+        # 单次最多豁免 2 个维度；3 个 N/A → 校验失败（防模型全标 N/A 拿高分）
+        with pytest.raises(ValueError):
+            _result_from_json(
+                '{"total_score": 0, "is_red_alert": false, "red_alert_reasons": [],'
+                ' "is_yellow_alert": false, "yellow_alert_reasons": [],'
+                ' "d_scores": {"d1_emotion_change": {"score": null, "na_reason": "a"},'
+                ' "d2_profile_match": {"score": null, "na_reason": "b"},'
+                ' "d3_problem_match": {"score": null, "na_reason": "c"},'
+                ' "d4_expectation_exceed": {"score": 15}},'
+                ' "s_scores": {"s1_emotion_stabilize": {"sub_items": {"empathy": 4, "customized": 5, "direct": 4, "no_conflict": 5, "vent_guide": 2}},'
+                ' "s2_problem_closure": {"sub_items": {"completeness": 4, "structure": 4, "next_step": 3, "follow_up": 4}},'
+                ' "s3_professional_supply": {"sub_items": {"logic": 4, "explain_why": 3, "decision_ownership": 3}}}}'
+            )
+
+    def test_s_dimension_na_exempts_whole_dimension(self):
+        # S 维度 N/A → 子项一并豁免（分数忽略），分母扣该维度满分 20
+        data = _base_result()
+        data["s_scores"]["s1_emotion_stabilize"] = {
+            "score": None,
+            "na_reason": "客户未流露情绪，无共情对话可评",
+            "sub_items": {"empathy": 4, "customized": 5, "direct": 4, "no_conflict": 5, "vent_guide": 2},
+        }
+        result = _result_from_json(json.dumps(data, ensure_ascii=False))
+        apply_guardrails(result, _template(), turn_count=10)
+        assert result.effective_max == 80  # 100 − s1 的 20 分
+        na = {nd["key"]: nd for nd in result.na_dims}
+        assert na["s1"]["max"] == 20
+        assert result.s_scores.s1_emotion_stabilize.score is None
+        assert result.total_score == 100  # 其余满分 80/80
 
 
 class TestTemplateValidation:

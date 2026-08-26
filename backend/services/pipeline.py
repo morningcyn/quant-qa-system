@@ -51,7 +51,7 @@ def _default_temperature(cfg: dict) -> float:
 
 async def _call_main_with_fallbacks(
     client, system: str, user: str, numbered_text: str, session_title: str | None, cfg: dict,
-    teacher_persona: str | None = None,
+    teacher_persona: str | None = None, evaluatee: str | None = None,
 ) -> LLMResultSchema:
     """一次主调用 + L1/L2 降级；仍失败进入 L3 拆分。"""
     temperature = _default_temperature(cfg)
@@ -71,12 +71,12 @@ async def _call_main_with_fallbacks(
         if exc.code != "bad_json":
             raise
     # L3：拆分为 评分 + 改写 两次调用
-    return await _call_split(client, system, user, numbered_text, session_title, cfg, teacher_persona)
+    return await _call_split(client, system, user, numbered_text, session_title, cfg, teacher_persona, evaluatee)
 
 
 async def _call_split(
     client, system: str, user: str, numbered_text: str, session_title: str | None, cfg: dict,
-    teacher_persona: str | None = None,
+    teacher_persona: str | None = None, evaluatee: str | None = None,
 ) -> LLMResultSchema:
     """L3：调用 A 只出评分，调用 B 以评分结果为上下文出高亮改写与建议。"""
     temperature = _default_temperature(cfg)
@@ -98,7 +98,7 @@ async def _call_split(
         rewrite = await json_guard.complete_json(
             client,
             prompts.build_rewrite_only_system(),
-            prompts.build_rewrite_user_prompt(numbered_text, scoring_text, session_title, teacher_persona),
+            prompts.build_rewrite_user_prompt(numbered_text, scoring_text, session_title, teacher_persona, evaluatee),
             RewriteOnlySchema,
             retries=1,
             temperature=temperature,
@@ -135,6 +135,7 @@ async def run_inspection(
     assistant_id: int,
     raw_text: str,
     session_title: str | None = None,
+    evaluatee: str | None = None,
     client=None,
     cfg: dict | None = None,
 ):
@@ -144,6 +145,9 @@ async def run_inspection(
         raise BizError("not_found", "员工不存在", status_code=404)
     # ① 结构化解析（防呆硬错误在此抛出，不进模型）
     parsed = parser_service.parse_raw(raw_text)
+    # 锁定本次评估对象：多角色对话只对指定助理计分（为空时按唯一助理推导，兜底"助理A"）
+    if not (evaluatee or "").strip():
+        evaluatee = (parsed.speakers or ["助理A"])[0]
     # ② 规则上下文
     template = scoring.load_template(session, assistant.template_type)
     rulebook = scoring.render_rulebook(template)
@@ -155,18 +159,18 @@ async def run_inspection(
     )
     teacher_persona = assistant.teacher_persona or None
     user = prompts.build_user_prompt(
-        assistant.name, assistant.employee_no, template, numbered_text, session_title, teacher_persona
+        assistant.name, assistant.employee_no, template, numbered_text, session_title, teacher_persona, evaluatee
     )
     # ③④⑤ 一次主调用（内含归因、黄金改写、建议），带 L1/L2/L3 降级
     if client is None:
         client, cfg = factory.get_active_runtime(session)
     try:
         result = await _call_main_with_fallbacks(
-            client, system, user, numbered_text, session_title, cfg, teacher_persona
+            client, system, user, numbered_text, session_title, cfg, teacher_persona, evaluatee
         )
     except LLMError as exc:
         raise BizError(exc.code, exc.message, status_code=400) from exc
-    # ②' 后端重算熔断与总分（不信任模型算术），红灯一票否决补全
+    # ②' 后端重算熔断与总分（不信任模型算术），红灯一票否决补全，N/A 维度动态分母折算
     result = scoring.apply_guardrails(result, template, len(parsed.turns))
     profile = (result.d_scores.d2_profile_match.profile or "").strip() or None
     return repository.save_inspection(
@@ -187,4 +191,7 @@ async def run_inspection(
         s_scores=result.s_scores.model_dump(),
         highlight_dialogue=[h.model_dump() for h in result.highlight_dialogue],
         suggestions=result.improvement_suggestions,
+        evaluatee=evaluatee,
+        na_dims=getattr(result, "na_dims", None),
+        effective_max=getattr(result, "effective_max", None),
     )

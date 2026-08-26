@@ -27,6 +27,19 @@ _THREE_LINES = """## 打分标准与改写约束（三道红线）
 市场波动不可预测，严禁给出具体的买卖价格数字（如"跌到15块买""12块以下补仓"）。
 必须使用专业术语进行模糊化处理：下方支撑位、企稳信号、右侧确认、均线附近等。"""
 
+# 评估边界（局部视角）：对话切片声明 + 禁过度推断扣分 + N/A 用法（主提示词与 L3 评分提示词共用）
+_EVAL_BOUNDARY = """## 评估边界（局部视角）
+1. 你当前接收到的是一段不完整的对话切片（可能是整个会话的一部分，缺乏寒暄与前情提要）。
+2. 仅基于文本中可见的信息对【本次评估对象】的服务质量进行评估，严禁因缺乏寒暄、缺乏前情提要、未见后续回应而进行过度推断或扣分。
+3. 评估对象以外的角色发言（如其他助理）仅作为上下文背景理解，不对其计分、不因对话中混有他人发言而扣分。
+4. 若某维度确实无法依据文本判定（如客户未表达情绪、无相关对话内容），该维度 score 输出 null 并附 na_reason 说明原因，禁止强行打 0 分；豁免维度由系统按得分率折算总分。
+5. 可判定的维度必须照常打分，不得借"信息不足"逃避打分；N/A 豁免最多 2 个维度。
+6. 典型豁免场景（命中必须输出 null，严禁凭空白打分或打低分）：
+   - 客户全程未表达任何情绪（无焦虑、愤怒、抱怨、感激等情绪信号）→ D1 情绪转化 必须豁免，不得因"情绪无明显变化"打分；
+   - 对话截断且无任何衍生互动迹象 → D4 预期超越 必须豁免，不得因"未预判、未给选择权"扣分；
+   - 无客户画像相关信息（身份、性格、处境均不可见）→ D2 画像匹配 豁免；
+   - 客户只做简单询问、未展开诉求 → D3 诉求穿透 不得强行挖掘深层诉求扣分。"""
+
 # 教学示例：合规 Bad Case 原话 vs 老师腔模糊化改写（教导"老师的语气"与"模糊化专业表达"）
 _FEW_SHOT_EXAMPLE = """员工原话：这只票明天肯定反弹，你等它跌到12块钱的时候直接重仓抄底，保准回本。
 
@@ -83,11 +96,13 @@ D4 预期需求超越（满分 8分）
 
 
 def build_system_prompt(rulebook: str) -> str:
-    return f"""你是一名资深客服/投顾会话质检专家，负责对员工与客户的对话录音转写文本进行严格质检。你必须独立、客观地按《质检评分规则》打分，不受员工资历、客套话影响，不放过任何一处违反规则的话术。
+    return f"""你是一名资深投顾会话质检专家，负责对员工（助理）与客户的对话录音转写文本进行严格质检。你必须独立、客观地按《质检评分规则》打分，不受员工资历、客套话影响，不放过任何一处违反规则的话术。
 
 {_THREE_LINES}
 
 {rulebook}
+
+{_EVAL_BOUNDARY}
 
 ## 业务打分机制文字版（补充参照）
 以下为该业务线提供的最新打分机制文字版，作为《质检评分规则》的补充口径。文字版中的子项锚点用于细化各维度打分判断，其特殊判定条款（如 D1 情绪变差"情绪事故，黄灯及以下"、S1-4 加大负向情绪、S2-1 答非所问）命中时必须在对应维度给低分并在 yellow_alert_reasons / comment 中写明：
@@ -111,6 +126,7 @@ def build_system_prompt(rulebook: str) -> str:
   - s2_problem_closure: {{"sub_items": {{"completeness": {{...}}, "structure": {{...}}, "next_step": {{...}}, "follow_up": {{...}}}}}}
   - s3_professional_supply: {{"sub_items": {{"logic": {{...}}, "explain_why": {{...}}, "decision_ownership": {{...}}}}}}
 - 算术剥离：你只负责给出底层分（D 各维度 score、S 各子项 score）。不要输出维度汇总、不要计算总分、不要试图让子项之和等于某个数——汇总计算由系统自动完成。你只需保证每个底层分符合规则书锚点，且 analysis 与 score 自洽。
+- N/A 豁免：无法判定的维度 score 输出 null（严禁填 0），并在该维度内加 "na_reason": "无法判定的具体原因"；S 维度豁免时其 sub_items 各子项 score 一并输出 null。豁免最多 2 个维度。
 - highlight_dialogue: 数组（最多 5 条，按扣分严重度排序），每条 {{"turn": 轮次号(与输入编号一致), "role": "助"(该轮发言人), "original_text": 原话原文, "issue_type": "扣分维度编号，如 S1-1, S2-3", "ai_rewrite": "黄金话术改写"}}。只收录确实扣分的话术，无扣分则为 []。改写必须符合三道红线与老师人设：用"你"、权威笃定、专业术语模糊化、交还决策权。
 - improvement_suggestions: 1~3 条个性化改进建议，必须即学即用（"下次这样做……"），禁止泛泛而谈。
 
@@ -126,7 +142,7 @@ def build_system_prompt(rulebook: str) -> str:
 6. 严格遵守红灯一票否决：命中任一合规红线必须 is_red_alert=true 并给出原因，禁止因总分高而隐瞒；也禁止为规避黄灯而虚高打分。
 
 ## 格式容错
-若输入对话轮次不完整，按已解析的轮次评分并在相应 comment 中说明；若某维度因对话信息不足无法判断，给出保守中等分并在 comment 说明原因。"""
+若输入对话轮次不完整，按已解析的轮次评分并在相应 comment 中说明；若某维度因对话信息不足确实无法判断，按"评估边界"的 N/A 机制输出 score:null + na_reason，禁止强行给 0 分或保守虚打中等分。"""
 
 
 def build_user_prompt(
@@ -136,6 +152,7 @@ def build_user_prompt(
     numbered_text: str,
     session_title: str | None = None,
     teacher_persona: str | None = None,
+    evaluatee: str | None = None,
 ) -> str:
     persona = (teacher_persona or "").strip()
     if persona:
@@ -143,17 +160,22 @@ def build_user_prompt(
     else:
         persona_block = "老师人设：未配置，按通用\"高级投顾老师\"标准评估（权威、专业、有主见、用\"你\"平视交流）。\n"
     title_line = f"会话标题：{session_title}\n" if session_title else ""
+    evaluatee_line = (
+        f"本次评估对象：{evaluatee}（仅对该对象的言论计分；其余角色发言仅作为上下文背景理解，不对其计分）\n"
+        if evaluatee
+        else ""
+    )
     return f"""请对以下员工会话进行质检评分。
 
 员工姓名：{assistant_name}
 员工工号：{employee_no}
 质检模板：{template['name']}
 模板尺度说明：{template.get('scale_note', '')}
-{persona_block}
+{evaluatee_line}{persona_block}
 请完全代入这位老师的视角与风控纪律去评估该员工的话术：
 1. 打分时，员工话术是否维持了老师应有的权威、专业与平视语气，是各维度评分的依据之一；
 2. highlight_dialogue 中 ai_rewrite 的黄金改写，必须符合这位老师的行文风格与表达习惯，并严守三道红线（人设/合规/点位）。
-{title_line}对话记录（方括号内为轮次号与角色，[客]=客户、[助]=员工/助理）：
+{title_line}对话记录（方括号内为轮次号与发言角色名，如 [1][客户]、[2][助理A]，角色名即该轮发言人，可区分多位助理）：
 
 {numbered_text}
 
@@ -163,11 +185,13 @@ def build_user_prompt(
 # ---------- L3 降级拆分提示词 ----------
 
 def build_scoring_only_system(rulebook: str) -> str:
-    return f"""你是资深客服/投顾会话质检专家，严格按《质检评分规则》打分。
+    return f"""你是资深投顾会话质检专家，严格按《质检评分规则》打分。
 
 {_THREE_LINES}
 
 {rulebook}
+
+{_EVAL_BOUNDARY}
 
 ## 业务打分机制文字版（补充参照）
 以下为该业务线提供的最新打分机制文字版，作为《质检评分规则》的补充口径。文字版中的子项锚点用于细化各维度打分判断，其特殊判定条款（如 D1 情绪变差"情绪事故，黄灯及以下"、S1-4 加大负向情绪、S2-1 答非所问）命中时必须在对应维度给低分并在 yellow_alert_reasons / comment 中写明：
@@ -182,13 +206,14 @@ def build_scoring_only_system(rulebook: str) -> str:
 - yellow_alert_reasons: 字符串数组（业务瑕疵失分根因）。
 - d_scores: 对象，含 d1_emotion_change、d2_profile_match、d3_problem_match、d4_expectation_exceed，每项 {{"analysis": 事实盘点, "score": 整数, 其余字段同完整协议}}。
 - s_scores: 对象，含 s1_emotion_stabilize、s2_problem_closure、s3_professional_supply，每个维度只含 sub_items，每个子项 {{"analysis": 事实盘点, "score": 整数}}。
+- N/A 豁免：无法判定的维度 score 输出 null（严禁填 0）并在该维度加 "na_reason": 原因；S 维度豁免时其子项 score 一并输出 null；豁免最多 2 个维度。
 
 算术剥离：你只负责打底层分（D 各维度 score、S 各子项 score），不要汇总维度分、不要计算总分。
-防呆红线：只依据原文事实；每个底层分先写 analysis 盘点事实再给分；红灯必须如实触发；禁止为规避黄灯虚高打分。"""
+防呆红线：只依据原文事实；每个底层分先写 analysis 盘点事实再给分；红灯必须如实触发；禁止为规避黄灯虚高打分；禁止借"信息不足"逃避可判定维度的打分。"""
 
 
 def build_rewrite_only_system() -> str:
-    return """你是客服话术教练，基于质检评分结果，为对话中被扣分的话术生成黄金改写，并给出个性化改进建议。改写必须符合"高级投顾老师"人设：
+    return """你是投顾话术教练，基于质检评分结果，为对话中被扣分的话术生成黄金改写，并给出个性化改进建议。改写必须符合"高级投顾老师"人设：
 
 ## 改写准则（三道红线）
 1. 人设纪律：权威、专业、有主见；用"你"平视交流；禁止卑微、过度道歉、迎合奉承的客服腔。
@@ -214,11 +239,17 @@ def build_rewrite_user_prompt(
     scoring_json: str,
     session_title: str | None = None,
     teacher_persona: str | None = None,
+    evaluatee: str | None = None,
 ) -> str:
     persona = (teacher_persona or "").strip()
     persona_line = f"该员工扮演的老师人设：{persona}\n" if persona else ""
     title_line = f"会话标题：{session_title}\n" if session_title else ""
-    return f"""{persona_line}{title_line}对话记录（方括号内为轮次号与角色）：
+    evaluatee_line = (
+        f"本次评估对象：{evaluatee}（仅针对该对象被扣分的话术进行改写，其余角色发言不纳入）\n"
+        if evaluatee
+        else ""
+    )
+    return f"""{persona_line}{evaluatee_line}{title_line}对话记录（方括号内为轮次号与发言角色名，角色名即该轮发言人）：
 
 {numbered_text}
 

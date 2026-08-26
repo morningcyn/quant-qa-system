@@ -7,14 +7,40 @@ import socket
 import sys
 import threading
 import time
+import traceback
 import urllib.request
 import webbrowser
 
 import uvicorn
 
-from backend.config import APP_VERSION, DATA_DIR
+from backend.config import APP_VERSION, DATA_DIR, ROOT_DIR
 
-APP_TITLE = "客服会话质检助手"
+APP_TITLE = "助理会话质检助手"
+
+if sys.stdout is None or sys.stderr is None:
+    # 无控制台环境（PyInstaller --windowed / pythonw 双击启动）：
+    # sys.stdout/stderr 为 None，uvicorn 配置日志时调用 .isatty() 会崩溃，
+    # 统一重定向到 devnull（不影响 _log 落盘 errors.log）。
+    import io
+
+    _null = io.StringIO()
+    if sys.stdout is None:
+        sys.stdout = _null
+    if sys.stderr is None:
+        sys.stderr = _null
+
+ERROR_LOG = ROOT_DIR / "errors.log"
+
+
+def _log(msg: str) -> None:
+    """开发模式输出控制台；打包模式（无控制台）落盘到 exe 同级 errors.log。"""
+    print(msg)
+    if getattr(sys, "frozen", False):
+        try:
+            with open(ERROR_LOG, "a", encoding="utf-8") as f:
+                f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {msg}\n")
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def find_free_port() -> int:
@@ -25,12 +51,15 @@ def find_free_port() -> int:
 
 def start_backend(port: int) -> None:
     def _run():
-        uvicorn.run(
-            "backend.main:app",
-            host="127.0.0.1",
-            port=port,
-            log_level="warning",
-        )
+        try:
+            uvicorn.run(
+                "backend.main:app",
+                host="127.0.0.1",
+                port=port,
+                log_level="warning",
+            )
+        except Exception:  # noqa: BLE001 捕获 uvicorn 启动异常，打包模式落日志
+            _log("uvicorn 启动失败：\n" + traceback.format_exc())
 
     thread = threading.Thread(target=_run, daemon=True)
     thread.start()
@@ -77,17 +106,18 @@ def main() -> None:
     url = f"http://127.0.0.1:{port}"
     start_backend(port)
     if not wait_healthy(url):
-        print("后端启动失败，请检查 Python 依赖是否完整（pip install -r requirements.txt）")
+        _log("后端启动失败，请检查 Python 依赖是否完整（pip install -r requirements.txt）")
         sys.exit(1)
 
     if "--dev" in sys.argv:
-        print(f"开发模式：浏览器访问 {url}")
+        _log(f"开发模式：浏览器访问 {url}")
         webbrowser.open(url)
         return
 
     try:
         import webview
 
+        _log(f"后端就绪：{url}")
         webview.create_window(
             APP_TITLE,
             url,
@@ -97,16 +127,22 @@ def main() -> None:
             background_color="#0d0d0d",
             js_api=JsApi(),
         )
+        _log("启动 pywebview 窗口（edgechromium）…")
         webview.start(gui="edgechromium")  # 主线程阻塞 GUI 循环；窗口关闭即退出
+        _log("窗口已关闭，进程退出")
     except ImportError:
-        print("未安装 pywebview，请执行：pip install pywebview")
+        _log("未安装 pywebview，请执行：pip install pywebview")
         webbrowser.open(url)
     except Exception as exc:  # noqa: BLE001
-        print(f"桌面窗口启动失败：{exc}")
-        print("请确认已安装 Microsoft Edge WebView2 Runtime（Windows 11 一般自带）。")
-        print(f"已改用浏览器访问：{url}")
+        _log(f"桌面窗口启动失败：{exc}")
+        _log(traceback.format_exc())
+        _log("已改用浏览器访问：" + url)
         webbrowser.open(url)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:  # noqa: BLE001 最外层兜底：任何未捕获异常都落日志
+        _log("程序启动异常：\n" + traceback.format_exc())
+        sys.exit(1)

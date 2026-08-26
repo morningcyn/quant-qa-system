@@ -89,3 +89,53 @@ def test_top3_loss_empty_db(session, assistant):
     result = top3_loss(session, assistant.id, days=30)
     assert result["dimensions"] == []
     assert result["sub_items"] == []
+
+
+def test_build_report_view_na_fields(session, assistant):
+    """报告视图透传评估对象与 N/A 折算信息；effective_score 不含豁免维度得分。"""
+    from backend.services.report import build_report_view
+
+    repository.save_inspection(
+        session, assistant.id, "N/A报告", total_score=72,
+        is_yellow_alert=False, yellow_alert_reasons=[],
+        template_snapshot=SNAPSHOT, turn_count=4, customer_profile=None,
+        raw_dialogue="[客] hi\n[助] hi",
+        d_scores={"d1_emotion_change": {"score": 7},
+                  "d2_profile_match": {"score": None, "na_reason": "无情绪信息"},
+                  "d3_problem_match": {"score": 10},
+                  "d4_expectation_exceed": {"score": 9}},
+        s_scores={"s1_emotion_stabilize": {"score": 15, "sub_items": {}},
+                  "s2_problem_closure": {"score": 12, "sub_items": {}},
+                  "s3_professional_supply": {"score": 8, "sub_items": {}}},
+        highlight_dialogue=[], suggestions=[],
+        evaluatee="助理A",
+        na_dims=[{"key": "d2", "name": "画像匹配", "reason": "无情绪信息", "max": 15}],
+        effective_max=85,
+    )
+    inspection = repository.list_inspections(session, assistant_id=assistant.id)[0][0]
+    view = build_report_view(session, inspection)
+    assert view["evaluatee"] == "助理A"
+    assert view["na_dims"][0]["key"] == "d2"
+    assert view["effective_max"] == 85
+    assert view["effective_score"] == 7 + 10 + 9 + 15 + 12 + 8  # 豁免维度得分不计入
+
+
+def test_top3_loss_skips_na_dimension(session, assistant):
+    """Top3 失分统计跳过 N/A 豁免维度。"""
+    repository.save_inspection(
+        session, assistant.id, "N/A Top3", total_score=72,
+        is_yellow_alert=False, yellow_alert_reasons=[],
+        template_snapshot=SNAPSHOT, turn_count=4, customer_profile=None,
+        raw_dialogue="[客] hi\n[助] hi",
+        d_scores={"d1_emotion_change": {"score": 10},
+                  "d2_profile_match": {"score": None, "na_reason": "无情绪信息"},
+                  "d3_problem_match": {"score": 15},
+                  "d4_expectation_exceed": {"score": 15}},
+        s_scores=S_SUBS,
+        highlight_dialogue=[], suggestions=[],
+        na_dims=[{"key": "d2", "name": "画像匹配", "reason": "无情绪信息", "max": 15}],
+        effective_max=85,
+    )
+    result = top3_loss(session, assistant.id, days=30)
+    dims = {d["key"]: d for d in result["dimensions"]}
+    assert "d2" not in dims
