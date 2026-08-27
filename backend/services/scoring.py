@@ -99,7 +99,9 @@ def _s_items(result: LLMResultSchema):
     ]
 
 
-def apply_guardrails(result: LLMResultSchema, template: dict, turn_count: int) -> LLMResultSchema:
+def apply_guardrails(
+    result: LLMResultSchema, template: dict, turn_count: int, max_turn: int | None = None
+) -> LLMResultSchema:
     """输出侧校核：越界钳制、S 维度分=Σ子项（算术剥离）、N/A 豁免与动态分母折算、
     总分与熔断重算、红灯补全、建议裁剪、高亮过滤排序。
     na_dims / effective_max 作为附加属性挂在 result 上（不进入 schema 落库字段）。"""
@@ -166,9 +168,11 @@ def apply_guardrails(result: LLMResultSchema, template: dict, turn_count: int) -
     suggestions = [s.strip() for s in result.improvement_suggestions if s and s.strip()]
     result.improvement_suggestions = suggestions[:3]
     # 高亮：过滤越界轮次、补角色、按轮次排序、最多 5 条
+    # 轮次上界：多助理分段质检时 turn_no 为原始绝对轮次（可能 > 段内轮数），用 max_turn 校验
+    turn_upper = max_turn if max_turn else max(turn_count, 1)
     highlights = []
     for h in result.highlight_dialogue:
-        if not (1 <= int(h.turn) <= max(turn_count, 1)):
+        if not (1 <= int(h.turn) <= turn_upper):
             continue
         role = parser_service.normalize_role(h.role) or "助"
         h.role = role

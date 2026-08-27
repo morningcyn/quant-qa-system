@@ -153,6 +153,7 @@ def build_user_prompt(
     session_title: str | None = None,
     teacher_persona: str | None = None,
     evaluatee: str | None = None,
+    context_text: str | None = None,
 ) -> str:
     persona = (teacher_persona or "").strip()
     if persona:
@@ -163,6 +164,12 @@ def build_user_prompt(
     evaluatee_line = (
         f"本次评估对象：{evaluatee}（仅对该对象的言论计分；其余角色发言仅作为上下文背景理解，不对其计分）\n"
         if evaluatee
+        else ""
+    )
+    # 多助理轮替：评估段落之外的对话（段前前文 / 块尾后客户反馈）仅作衔接参考，明确不计分
+    context_block = (
+        f"\n【上下文（评估对象发言之外的对话，仅作参考衔接理解，不计分）】\n{context_text}\n"
+        if context_text
         else ""
     )
     return f"""请对以下员工会话进行质检评分。
@@ -178,7 +185,7 @@ def build_user_prompt(
 {title_line}对话记录（方括号内为轮次号与发言角色名，如 [1][客户]、[2][助理A]，角色名即该轮发言人，可区分多位助理）：
 
 {numbered_text}
-
+{context_block}
 请严格按规则书完成评分，只输出一个 JSON 对象。"""
 
 
@@ -258,3 +265,50 @@ def build_rewrite_user_prompt(
 {scoring_json}
 
 请基于评分结果定位扣分话术，生成黄金改写与改进建议。黄金改写必须符合上述老师人设与三道红线（人设/合规/点位），只输出一个 JSON 对象。"""
+
+
+# ---------- 多人质检总览 ----------
+
+def build_overview_system_prompt() -> str:
+    return """你是投顾团队质检汇总负责人。基于给定的"多位助理质检结果摘要"，为一次完整的客户服务出具总览。
+
+要求：
+1. 只基于摘要中的事实汇总，严禁虚构输入中不存在的评分、发言或结论；
+2. 主要优点/主要问题可点名助理（如"王萌（78分）：情绪承接及时"），优先收录红灯/黄灯根因；
+3. customer_issue_resolved 只能取枚举值"是/部分/否/无法判断"：摘要明确显示客户问题被解决且后续无不满 → "是"；
+   部分回应或仍存疑问 → "部分"；明确未解决 → "否"；材料不足 → 必须"无法判断"（严禁猜测）；
+4. 多位助理结论矛盾时如实并列，不要掩盖；
+5. overall_comment 概括本次服务整体质量（1~3 句）。
+
+只输出一个 JSON 对象，包含：main_strengths（字符串数组）、main_issues（字符串数组）、
+customer_issue_resolved（枚举）、resolution_reason（字符串，判断依据，材料不足时说明为什么无法判断）、
+overall_comment（字符串）。"""
+
+
+def build_overview_user_prompt(title: str | None, participants: list[dict], raw_dialogue: str) -> str:
+    """总览汇总输入：逐位助理拼块（姓名/工号/分数/黄红根因/画像/回复数/扣分话术/建议）。"""
+    title_line = f"会话标题：{title}\n\n" if title else ""
+    parts = []
+    for p in participants:
+        parts.append(
+            "".join(
+                [
+                    f"助理：{p['name']}（工号 {p['employee_no']}）\n",
+                    f"总分：{p['total_score']} / 100\n",
+                    f"红灯：{('、'.join(p['red_alert_reasons'])) if p['red_alert_reasons'] else '无'}\n",
+                    f"黄灯：{('、'.join(p['yellow_alert_reasons'])) if p['yellow_alert_reasons'] else '无'}\n",
+                    f"客户画像：{p['customer_profile'] or '未识别'}\n",
+                    f"回复数量：{p['reply_count']} 条（轮次区间 {p['turn_range']}）\n",
+                    f"主要扣分话术（前3条）：{('；'.join(p['top_issue_quotes'])) if p['top_issue_quotes'] else '无'}\n",
+                    f"改进建议：{('；'.join(p['suggestions'])) if p['suggestions'] else '无'}\n",
+                ]
+            )
+        )
+    participant_block = "\n".join(parts)
+    return f"""{title_line}本次客户服务由以下助理共同完成：
+
+{participant_block}
+【完整原始聊天记录】
+{raw_dialogue}
+
+请按系统提示输出总览 JSON。"""

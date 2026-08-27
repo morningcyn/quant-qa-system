@@ -138,13 +138,31 @@ async def run_inspection(
     evaluatee: str | None = None,
     client=None,
     cfg: dict | None = None,
+    pre_parsed_turns: list | None = None,
+    context_dialogue: str | None = None,
+    context_text: str | None = None,
 ):
-    """完整质检流水线：返回 repository.Inspection（已落库）。"""
+    """完整质检流水线：返回 repository.Inspection（已落库）。
+
+    pre_parsed_turns：多人质检分段的结构化轮次（保留绝对 turn_no 与原始 speaker），
+    优先于 raw_text 正则解析——第一版编号文本 [n][speaker] 无法被 parse_raw 反解。
+    context_dialogue / context_text：评估段落之外的对话（仅作衔接参考，不计分），
+    两者皆缺省时行为与第一版完全一致。
+    """
     assistant = repository.get_assistant(session, assistant_id)
     if assistant is None:
         raise BizError("not_found", "员工不存在", status_code=404)
     # ① 结构化解析（防呆硬错误在此抛出，不进模型）
-    parsed = parser_service.parse_raw(raw_text)
+    if pre_parsed_turns:
+        parsed = parser_service.parse_turns(pre_parsed_turns)
+    else:
+        parsed = parser_service.parse_raw(raw_text)
+    # 前置/后文上下文（多人轮替衔接）：编号文本直用（多段已生成），或解析原文（解析失败不影响质检）
+    if context_text is None and (context_dialogue or "").strip():
+        try:
+            context_text = parser_service.to_numbered_text(parser_service.parse_raw(context_dialogue).turns)
+        except Exception:  # noqa: BLE001 上下文解析失败不影响主对话质检
+            context_text = None
     # 锁定本次评估对象：多角色对话只对指定助理计分（为空时按唯一助理推导，兜底"助理A"）
     if not (evaluatee or "").strip():
         evaluatee = (parsed.speakers or ["助理A"])[0]
@@ -159,7 +177,8 @@ async def run_inspection(
     )
     teacher_persona = assistant.teacher_persona or None
     user = prompts.build_user_prompt(
-        assistant.name, assistant.employee_no, template, numbered_text, session_title, teacher_persona, evaluatee
+        assistant.name, assistant.employee_no, template, numbered_text, session_title, teacher_persona, evaluatee,
+        context_text=context_text,
     )
     # ③④⑤ 一次主调用（内含归因、黄金改写、建议），带 L1/L2/L3 降级
     if client is None:
@@ -171,7 +190,8 @@ async def run_inspection(
     except LLMError as exc:
         raise BizError(exc.code, exc.message, status_code=400) from exc
     # ②' 后端重算熔断与总分（不信任模型算术），红灯一票否决补全，N/A 维度动态分母折算
-    result = scoring.apply_guardrails(result, template, len(parsed.turns))
+    # 多助理分段：turn_no 为原始绝对轮次，高亮轮次上界按实际最大轮次校验（与正文编号一致）
+    result = scoring.apply_guardrails(result, template, len(parsed.turns), max_turn=max(t.turn_no for t in parsed.turns))
     profile = (result.d_scores.d2_profile_match.profile or "").strip() or None
     return repository.save_inspection(
         session,

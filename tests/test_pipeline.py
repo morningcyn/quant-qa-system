@@ -145,6 +145,47 @@ class TestPipeline:
         detail = repository.get_inspection_detail(session, inspection.id)
         assert detail.highlight_dialogue_json
 
+    def test_pre_parsed_turns_keeps_absolute_numbers(self, session, assistant):
+        """多人分段质检：结构化轮次直入（保留绝对 turn_no），编号文本不再经 parse_raw 反解。"""
+        from backend.services.parser import Turn
+
+        client = MockLLMClient([valid_llm_json()])
+        turns = [
+            Turn(role="客", speaker="客户", text="在吗", turn_no=1),
+            Turn(role="助", speaker="王萌", text="在的", turn_no=2),
+            Turn(role="客", speaker="客户", text="股票亏了怎么办", turn_no=5),
+            Turn(role="助", speaker="王萌", text="先别慌，帮您分析", turn_no=6),
+        ]
+        inspection = asyncio.run(
+            pipeline.run_inspection(
+                session, assistant.id, "分段文本（不回读）", client=client, cfg={},
+                evaluatee="王萌", pre_parsed_turns=turns,
+            )
+        )
+        assert inspection.turn_count == 4
+        user = client.calls[0]["user"]
+        assert "[1][客户] 在吗" in user and "[6][王萌] 先别慌，帮您分析" in user  # 绝对轮次号保留
+        assert "本次评估对象：王萌" in user
+
+    def test_context_text_injected_but_not_scored(self, session, assistant):
+        """多助理上下文注入：段外对话进入【上下文】区并声明不计分。"""
+        client = MockLLMClient([valid_llm_json()])
+        ctx = "[1][客户] 你好\n[2][客服A] 您好"
+        asyncio.run(
+            pipeline.run_inspection(
+                session, assistant.id, SAMPLE_DIALOGUE, client=client, cfg={}, context_text=ctx
+            )
+        )
+        user = client.calls[0]["user"]
+        assert "【上下文（评估对象发言之外的对话，仅作参考衔接理解，不计分）】" in user
+        assert "[1][客户] 你好" in user
+
+    def test_default_path_context_free(self, session, assistant):
+        """未传 context/pre_parsed 时 prompt 与第一版逐字节一致（无上下文区）。"""
+        client = MockLLMClient([valid_llm_json()])
+        asyncio.run(pipeline.run_inspection(session, assistant.id, SAMPLE_DIALOGUE, client=client, cfg={}))
+        assert "【上下文" not in client.calls[0]["user"]
+
     def test_evaluatee_injected_and_saved(self, session, assistant):
         """评估对象锁定：prompt 注入「本次评估对象」且落库。"""
         client = MockLLMClient([valid_llm_json()])

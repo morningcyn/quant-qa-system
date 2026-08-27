@@ -25,6 +25,15 @@ class ParsePreviewIn(BaseModel):
     raw_text: str = Field(min_length=1)
 
 
+class BatchInspectionIn(BaseModel):
+    """多人质检批次：完整聊天记录 + 助理规范名 → 员工 id 归属映射。"""
+
+    raw_dialogue: str = Field(min_length=1)
+    session_title: str | None = Field(default=None, max_length=200)
+    mapping: dict[str, int]
+    conversation_id: str | None = Field(default=None, max_length=64)
+
+
 class ModelConfigIn(BaseModel):
     id: str | None = None
     name: str = ""

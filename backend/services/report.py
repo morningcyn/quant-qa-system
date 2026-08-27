@@ -106,6 +106,111 @@ def trend_stats(session: Session, assistant_id: int, days: int = 30) -> dict:
     }
 
 
+# ---------- 优点（可借鉴）确定性推导（纯规则，不调 LLM） ----------
+
+_GOOD_RATIO = 0.8    # 维度得分率 ≥80% 视为亮点
+_MAX_STRENGTHS = 3   # 每位助理最多 3 条
+_COMMENT_MAX = 40    # 维度 comment 截断长度
+_DIM_AXIS_ORDER = ["d1", "d2", "d3", "d4", "s1", "s2", "s3"]  # 并列时固定轴序，保证确定性
+
+
+def _pick_score(map_: dict, key: str) -> dict:
+    """兼容短键（d1）与长键（d1_emotion_change）两种存储键（同 report.js pickScore）。"""
+    if not map_:
+        return {}
+    if key in map_:
+        return map_[key] or {}
+    for k, v in map_.items():
+        if k.startswith(key + "_"):
+            return v or {}
+    return {}
+
+
+def _sub_value(raw) -> int | None:
+    """子项 v2 为 {analysis, score} 对象，兼容旧格式纯数值。"""
+    if isinstance(raw, dict):
+        return raw.get("score")
+    return raw
+
+
+def derive_strengths(r: dict) -> list[str]:
+    """从报告视图确定性推导「可借鉴」优点列表（不新增 LLM 调用）。
+
+    高分维度（得分率 ≥80%）→ 亮点条目（可带 LLM 已写的维度 comment）；
+    S 维度整体未达标时落到高分子项；D4 预判/掌控感动作是更可执行的亮点。
+    候选不足 2 条时按确定性规则补足（合规健康/话术规范/持续接待）。
+    """
+    tpl = r.get("template_snapshot") or {}
+    d_scores = r.get("d_scores") or {}
+    s_scores = r.get("s_scores") or {}
+    na_keys = {nd.get("key") for nd in r.get("na_dims") or []}
+    candidates: list[tuple[float, int, int, str]] = []  # (ratio, max, axis_idx, text)
+
+    for axis_idx, key in enumerate(_DIM_AXIS_ORDER):
+        if key in na_keys:
+            continue
+        conf = (tpl.get("d") or {}).get(key) or (tpl.get("s") or {}).get(key) or {}
+        data = _pick_score(d_scores if key.startswith("d") else s_scores, key)
+        score = data.get("score")
+        max_score = int(conf.get("max") or 0)
+        if score is None or max_score <= 0:
+            continue
+        ratio = score / max_score
+        name = conf.get("name") or key
+        if ratio >= _GOOD_RATIO:
+            if key == "d4":
+                # 预判衍生问题 / 掌控感动作：比泛化措辞更可借鉴的动作型优点
+                derived = int(data.get("derived_question") or 0)
+                control = int(data.get("control_given") or 0)
+                if derived >= 1 or control >= 1:
+                    candidates.append(
+                        (ratio, max_score, axis_idx, f"{name}：预判衍生问题 {derived} 个、掌控感动作 {control} 个")
+                    )
+                    continue
+            text = f"{name}（{score}/{max_score} 分，得分率 {round(ratio * 100)}%）"
+            comment = (data.get("comment") or "").strip()
+            if comment:
+                if len(comment) > _COMMENT_MAX:
+                    comment = comment[:_COMMENT_MAX] + "…"
+                text += f"：{comment}"
+            candidates.append((ratio, max_score, axis_idx, text))
+        else:
+            # S 维度整体未达标：子项高分（如"针对性安慰"）是更可执行的动作优点
+            subs = (tpl.get("s") or {}).get(key, {}).get("sub_items") or {}
+            sub_data = data.get("sub_items") or {}
+            for sub_key, sub_conf in subs.items():
+                val = _sub_value(sub_data.get(sub_key))
+                sub_max = int(sub_conf.get("max") or 0)
+                if val is None or sub_max <= 0 or val / sub_max < _GOOD_RATIO:
+                    continue
+                candidates.append(
+                    (val / sub_max, sub_max, axis_idx, f"{name}·{sub_conf.get('name', sub_key)}（{val}/{sub_max} 分）")
+                )
+
+    candidates.sort(key=lambda c: (-c[0], -c[1], c[2]))
+    strengths = list(dict.fromkeys(c[3] for c in candidates))[:_MAX_STRENGTHS]
+
+    # 补足：候选不足 2 条时按确定性规则补到 ≥2（与 dispatcher 降级风格一致）
+    if len(strengths) < 2:
+        fillers = []
+        total = r.get("total_score")
+        if not r.get("is_red_alert") and isinstance(total, (int, float)) and total >= 60:
+            fillers.append(f"整体服务达标：无红灯违规，总分 {total} 分")
+        if not (r.get("highlight_dialogue") or []):
+            fillers.append("话术规范：本次会话未检出明显扣分话术")
+        reply_count = r.get("reply_count") or r.get("turn_count") or 0
+        if reply_count >= 3:
+            fillers.append(f"全程持续接待：共 {reply_count} 次回复，服务衔接完整")
+        if isinstance(total, (int, float)):
+            fillers.append(f"整体表现合格（总分 {total} 分）")
+        for f in fillers:
+            if len(strengths) >= _MAX_STRENGTHS:
+                break
+            if f not in strengths:
+                strengths.append(f)
+    return strengths
+
+
 def _item_loss_accumulate(
     key: str,
     name: str,

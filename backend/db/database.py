@@ -31,6 +31,8 @@ def _migrate() -> None:
         _ensure_column(conn, "inspections", "evaluatee", "VARCHAR(50)")
         _ensure_column(conn, "inspections", "na_dims_json", "TEXT")
         _ensure_column(conn, "inspections", "effective_max", "INTEGER")
+        # 多人质检（2026-08-27）：报告归属的客户服务会话 ID
+        _ensure_column(conn, "inspections", "conversation_id", "VARCHAR(64)")
         conn.commit()
 
 

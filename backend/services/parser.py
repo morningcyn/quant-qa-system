@@ -78,6 +78,38 @@ def normalize_role(raw: str) -> str | None:
     return None
 
 
+def match_marker(line: str) -> dict | None:
+    """公开行首角色标记匹配（复用同一套角色词表），供多人解析等上游模块复用。
+
+    返回 {"role": 角色词, "suffix": 编号或 None, "text": 内容, "kind": "marker"|"abbr",
+    "sep": 角色词后是否有显式分隔符（闭括号/冒号/空格）}。
+
+    sep=False 表示角色词与内容紧贴无分隔——"客气了，有收获就好"会被宽匹配成
+    角色词"客"+内容"气了，有收获就好"（吃字）。第一版 parse_raw 保留宽匹配
+    行为不变，上游模块（multiparser）通过 sep 拒绝此类误判。
+    """
+    abbr = _ABBR_RE.match(line)
+    if abbr:
+        return {"role": abbr.group("role"), "suffix": None, "text": abbr.group("text"), "kind": "abbr", "sep": True}
+    match = _MARKER_RE.match(line)
+    if match and match.group("role"):
+        role = match.group("role")
+        suffix = match.group("suffix") or ""
+        text = match.group("text")
+        # 显式分隔符检测：角色段（含可选前导括号）与 text 之间必须存在闭括号/冒号/空格
+        head = line[: len(line) - len(text)]
+        tail = head[len(role) + len(suffix):]
+        sep = bool(re.search(r"[\]】)）\"'']|[:：]|\s", tail))
+        return {
+            "role": role,
+            "suffix": match.group("suffix"),
+            "text": text,
+            "kind": "marker",
+            "sep": sep,
+        }
+    return None
+
+
 def parse_raw(raw: str) -> ParseResult:
     text = (raw or "").strip()
     if not text:
@@ -291,6 +323,22 @@ def _finalize(result: ParseResult, raw_text: str) -> None:
                 f"第 {cur.turn_no} 轮附近连续 {run} 轮同一角色，疑似角色标记缺失或格式错位"
             )
             break
+
+
+def parse_turns(turns: list[Turn], assign_speakers: bool = False) -> ParseResult:
+    """由预解析 Turn 列表直接构建 ParseResult（跳过正则解析）。
+
+    用于多人质检：分段后直接传结构化轮次（保留原始/绝对 turn_no，支持非连续轮次），
+    避免"编号文本再解析"丢失轮次号。克隆防污染；assign_speakers=False 时
+    保持 speaker 原样（纯角色词不会被改写为 助理A/助理B，保证 evaluatee 与文本一致）。
+    """
+    result = ParseResult(turns=[Turn(role=t.role, speaker=t.speaker, text=t.text, turn_no=t.turn_no) for t in turns])
+    if not result.turns:
+        raise ParseError("预解析轮次为空")
+    if assign_speakers:
+        _assign_speakers(result.turns)
+    _finalize(result, to_numbered_text(result.turns))
+    return result
 
 
 def to_numbered_text(turns: list[Turn], max_chars: int | None = None) -> str:

@@ -209,6 +209,8 @@
     async render(id, page) {
       page = page || 1;
       const app = document.getElementById("app");
+      // 离开总览语境：报告页的「← 返回本次总览对比」标记失效
+      localStorage.removeItem("last_overview");
       app.innerHTML = `<div class="empty"><div class="spinner" style="margin-bottom:12px"></div>正在加载…</div>`;
       try {
         const [a, trend, top3, hist] = await Promise.all([

@@ -107,7 +107,28 @@
       </div>`;
   }
 
-  function renderReportPage(app, r) {
+  // 从总览对比页进入的报告 → 返回链接指向该总览（员工主页进入保持原样）
+  // 校验方式：localStorage 里的 last_overview 的参与者必须包含本报告，否则视为残留并清除
+  async function resolveBackLink(reportId) {
+    let stored = null;
+    try {
+      stored = JSON.parse(localStorage.getItem("last_overview") || "null");
+    } catch (e) {
+      stored = null;
+    }
+    if (!stored || !stored.id) return null;
+    try {
+      const ov = await API.get(`/api/overviews/${stored.id}`);
+      const hit = (ov.participants || []).some((p) => p.report && p.report.id === reportId);
+      if (hit) return { id: stored.id, title: stored.title || "本次客户服务总览" };
+    } catch (e) {
+      // 总览不存在或网络失败 → 视为残留
+    }
+    localStorage.removeItem("last_overview");
+    return null;
+  }
+
+  function renderReportPage(app, r, back) {
     const tpl = r.template_snapshot || {};
     const dConf = tpl.d || {};
     const sConf = tpl.s || {};
@@ -177,7 +198,9 @@
       <div class="page report-page">
         <div class="page-head no-export">
           <div class="title-row">
-            <a class="back-link" href="#/assistant/${r.assistant_id}">← 返回 ${UI.esc(r.assistant_name)}</a>
+            ${back
+              ? `<a class="back-link" href="#/overview/${back.id}">← 返回本次总览对比${back.title ? `（${UI.esc(back.title)}）` : ""}</a>`
+              : `<a class="back-link" href="#/assistant/${r.assistant_id}">← 返回 ${UI.esc(r.assistant_name)}</a>`}
             <div>
               <div class="page-title">${r.session_title ? UI.esc(r.session_title) : "质检报告"}</div>
               <div class="page-sub">${UI.esc(r.assistant_name)}（工号 ${UI.esc(r.employee_no)}）· ${UI.fmtDate(r.created_at)}</div>
@@ -290,6 +313,11 @@
       });
     });
 
+    // 从总览进入的报告：点「返回员工主页」视为离开总览语境，清除返回标记
+    app.querySelectorAll('.sticky-actions a[href^="#/assistant/"]').forEach((a) => {
+      a.addEventListener("click", () => localStorage.removeItem("last_overview"));
+    });
+
     // 导出
     const root = app.querySelector(".report-page");
     const doPNG = () => Exporter.exportPNG(root, `${fileBase}.png`).then((m) => m && UI.toast(m, "success")).catch((e) => UI.handleError(e, "导出失败"));
@@ -306,7 +334,8 @@
       app.innerHTML = `<div class="empty"><div class="spinner" style="margin-bottom:12px"></div>正在加载报告…</div>`;
       try {
         const r = await API.get(`/api/reports/${id}`);
-        renderReportPage(app, r);
+        const back = await resolveBackLink(r.id);
+        renderReportPage(app, r, back);
       } catch (err) {
         app.innerHTML = `
           <div class="empty">

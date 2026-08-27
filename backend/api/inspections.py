@@ -4,8 +4,8 @@ from sqlalchemy.orm import Session
 
 from backend.db import repository
 from backend.db.database import get_db
-from backend.schemas.api import InspectionCreate
-from backend.services import pipeline, report
+from backend.schemas.api import BatchInspectionIn, InspectionCreate
+from backend.services import dispatcher, pipeline, report
 from backend.utils.errors import BizError
 
 router = APIRouter(tags=["inspections"])
@@ -19,6 +19,21 @@ async def create_inspection(
         session, assistant_id, body.raw_dialogue, body.session_title, body.evaluatee
     )
     return report.build_report_view(session, inspection)
+
+
+@router.post("/inspections/batch", status_code=201)
+async def create_batch_inspection(body: BatchInspectionIn, session: Session = Depends(get_db)):
+    """多人质检批次：并发为每位助理生成质检报告 + 本次客户服务总览。
+
+    部分助理失败不整体失败：errors 列表返回失败明细，至少 1 份成功即返回总览。
+    """
+    return await dispatcher.run_multi_inspection(
+        session,
+        body.raw_dialogue,
+        body.session_title,
+        body.mapping,
+        conversation_id=body.conversation_id,
+    )
 
 
 @router.get("/inspections")

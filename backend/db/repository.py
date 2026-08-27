@@ -6,7 +6,7 @@ from typing import Any
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session
 
-from backend.db.models import Assistant, Inspection, InspectionDetail, ScoreTemplate, Setting
+from backend.db.models import Assistant, Inspection, InspectionDetail, ScoreTemplate, ServiceOverview, Setting
 
 
 # ---------- assistants ----------
@@ -116,6 +116,57 @@ def save_inspection(
 
 def get_inspection(session: Session, inspection_id: int) -> Inspection | None:
     return session.get(Inspection, inspection_id)
+
+
+def set_inspection_conversation(session: Session, inspection_id: int, conversation_id: str) -> None:
+    """多人质检：报告归属的客户服务会话 ID（批量完成后补写，单助理路径不调用）。"""
+    obj = session.get(Inspection, inspection_id)
+    if obj is None:
+        return
+    obj.conversation_id = conversation_id
+    session.commit()
+
+
+# ---------- service_overviews（多人质检总览） ----------
+
+def save_overview(
+    session: Session,
+    conversation_id: str,
+    title: str | None,
+    raw_dialogue: str,
+    summary: dict,
+    degraded: bool,
+    inspection_ids: list[int],
+) -> ServiceOverview:
+    overview = ServiceOverview(
+        conversation_id=conversation_id,
+        title=(title or "").strip() or None,
+        raw_dialogue=raw_dialogue,
+        summary_json=json.dumps(summary, ensure_ascii=False),
+        degraded=degraded,
+        inspection_ids_json=json.dumps(inspection_ids, ensure_ascii=False),
+    )
+    session.add(overview)
+    session.commit()
+    return overview
+
+
+def get_overview(session: Session, overview_id: int) -> ServiceOverview | None:
+    return session.get(ServiceOverview, overview_id)
+
+
+def list_overviews(
+    session: Session,
+    page: int = 1,
+    page_size: int = 20,
+) -> tuple[list[ServiceOverview], int]:
+    """多人质检总览列表（按生成时间倒序），供「多人质检」页历史总览回看。"""
+    stmt = select(ServiceOverview).order_by(ServiceOverview.created_at.desc(), ServiceOverview.id.desc())
+    total = session.scalar(select(func.count()).select_from(stmt.subquery())) or 0
+    rows = list(
+        session.scalars(stmt.offset((page - 1) * page_size).limit(page_size))
+    )
+    return rows, total
 
 
 def list_inspections(

@@ -8,6 +8,8 @@
     { pattern: /^#\/assistants$/, view: () => Views.assistants.render() },
     { pattern: /^#\/assistant\/(\d+)$/, view: (m) => Views.assistantDetail.render(Number(m[1])) },
     { pattern: /^#\/report\/(\d+)$/, view: (m) => Views.report.render(Number(m[1])) },
+    { pattern: /^#\/multi$/, view: () => Views.multiUpload.render() },
+    { pattern: /^#\/overview\/(\d+)$/, view: (m) => Views.overview.render(Number(m[1])) },
     { pattern: /^#\/settings$/, view: () => Views.settings.render() },
   ];
 
@@ -94,7 +96,7 @@
       const m = hash.match(r.pattern);
       if (m) {
         document.querySelectorAll("#topnav a").forEach((a) => a.classList.remove("active"));
-        const navKey = hash.startsWith("#/assistants") ? "assistants" : hash.startsWith("#/settings") ? "settings" : null;
+        const navKey = hash.startsWith("#/assistants") ? "assistants" : hash.startsWith("#/multi") ? "multi" : hash.startsWith("#/settings") ? "settings" : null;
         if (navKey) {
           const link = document.querySelector(`#topnav a[data-nav="${navKey}"]`);
           if (link) link.classList.add("active");

@@ -49,7 +49,7 @@ def find_free_port() -> int:
         return sock.getsockname()[1]
 
 
-def start_backend(port: int) -> None:
+def start_backend(port: int) -> threading.Thread:
     def _run():
         try:
             uvicorn.run(
@@ -63,6 +63,7 @@ def start_backend(port: int) -> None:
 
     thread = threading.Thread(target=_run, daemon=True)
     thread.start()
+    return thread
 
 
 def wait_healthy(url: str, timeout: float = 10.0) -> bool:
@@ -104,7 +105,7 @@ class JsApi:
 def main() -> None:
     port = find_free_port()  # OS 随机分配，天然规避端口冲突
     url = f"http://127.0.0.1:{port}"
-    start_backend(port)
+    backend_thread = start_backend(port)
     if not wait_healthy(url):
         _log("后端启动失败，请检查 Python 依赖是否完整（pip install -r requirements.txt）")
         sys.exit(1)
@@ -112,6 +113,9 @@ def main() -> None:
     if "--dev" in sys.argv:
         _log(f"开发模式：浏览器访问 {url}")
         webbrowser.open(url)
+        # 保持进程存活：join 后端线程（uvicorn 常驻；Ctrl+C 或关闭终端即退出）。
+        # 不 join 的话 daemon 线程随主线程 return 被强杀，dev 模式后端必然死掉。
+        backend_thread.join()
         return
 
     try:

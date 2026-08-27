@@ -11,6 +11,18 @@ class TestMarkerText:
         assert result.turns[1].role == "助"
         assert result.role_stats["客"] == 1
 
+    def test_match_marker_sep_field(self):
+        """match_marker 的 sep：显式分隔符（闭括号/冒号/空格）为 True；
+        角色词与内容紧贴（"客气了…"吃字风险）为 False，供多人解析拒绝。"""
+        from backend.services.parser import match_marker
+
+        assert match_marker("[客] 你好")["sep"] is True
+        assert match_marker("客：你好")["sep"] is True
+        assert match_marker("客 你好")["sep"] is True
+        assert match_marker("客服A：您好")["sep"] is True
+        assert match_marker("客气了，有收获就好")["sep"] is False
+        assert match_marker("客户哈尔滨赢家1122")["sep"] is False  # 无分隔紧贴 → 吃字风险
+
     def test_colon_and_bracket_variants(self):
         result = parse_raw("客：你好\n【助】您好\n客户: 在吗\n(助) 在的")
         roles = [t.role for t in result.turns]

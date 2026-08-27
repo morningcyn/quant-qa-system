@@ -53,6 +53,8 @@ class Inspection(Base):
     # N/A 豁免维度 [{key, name, reason, max}] 与动态分母（满分 100 − Σ豁免维度满分）
     na_dims_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     effective_max: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # 多人质检：本次报告所属的客户服务会话 ID（dispatcher 事后补写，单助理路径为 None）
+    conversation_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.now)
 
     assistant: Mapped["Assistant"] = relationship(back_populates="inspections")
@@ -76,6 +78,25 @@ class InspectionDetail(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.now)
 
     inspection: Mapped["Inspection"] = relationship(back_populates="detail")
+
+
+class ServiceOverview(Base):
+    """多人质检总览：一次客户服务的完整会话 → 各助理质检报告 + LLM/规则总览。"""
+
+    __tablename__ = "service_overviews"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    conversation_id: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    title: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    # 完整原始聊天记录（需求：保留完整原始对话，可追溯）
+    raw_dialogue: Mapped[str] = mapped_column(Text, nullable=False)
+    # {summary: {main_strengths, main_issues, customer_issue_resolved, resolution_reason, overall_comment},
+    #  participants: [...], degraded: bool}
+    summary_json: Mapped[str] = mapped_column(Text, nullable=False)
+    degraded: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # 关联报告 inspection id 列表
+    inspection_ids_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.now)
 
 
 class ScoreTemplate(Base):

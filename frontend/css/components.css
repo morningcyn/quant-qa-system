@@ -173,6 +173,8 @@
 @keyframes toast-in { from { opacity: 0; transform: translateX(16px); } to { opacity: 1; transform: none; } }
 
 /* Loading 阶段动画 */
+.stage-overlay { position: fixed; inset: 0; z-index: 100; background: rgba(0, 0, 0, 0.45); display: flex; align-items: center; justify-content: center; }
+.stage-overlay .stage-box { background: var(--bg-card, #fff); border-radius: 12px; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25); min-width: 360px; max-width: 480px; }
 .stage-box { text-align: center; padding: 40px 20px; }
 .stage-title { font-size: 15px; font-weight: 600; margin-bottom: 20px; }
 .stage-steps { display: flex; flex-direction: column; gap: 12px; max-width: 340px; margin: 0 auto; text-align: left; }

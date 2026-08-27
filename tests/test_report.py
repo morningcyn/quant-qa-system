@@ -139,3 +139,118 @@ def test_top3_loss_skips_na_dimension(session, assistant):
     result = top3_loss(session, assistant.id, days=30)
     dims = {d["key"]: d for d in result["dimensions"]}
     assert "d2" not in dims
+
+
+# ---------- derive_strengths（多人质检对比看板「可借鉴」） ----------
+
+from backend.services.report import derive_strengths  # noqa: E402
+
+
+def _strength_report(**overrides):
+    """最小可用的报告视图字典（derive_strengths 只读这些键）。"""
+    base = {
+        "total_score": 72,
+        "is_red_alert": False,
+        "is_yellow_alert": False,
+        "highlight_dialogue": [],
+        "turn_count": 6,
+        "reply_count": 5,
+        "na_dims": [],
+        "template_snapshot": SNAPSHOT,
+        "d_scores": {
+            "d1_emotion_change": {"score": 6},   # 6/10
+            "d2_profile_match": {"score": 15},   # 15/15
+            "d3_problem_match": {"score": 15},   # 15/15
+            "d4_expectation_exceed": {"score": 9},  # 9/15
+        },
+        "s_scores": {
+            "s1_emotion_stabilize": {"score": 16},  # 16/20
+            "s2_problem_closure": {"score": 9},     # 9/15 → 子项检查
+            "s3_professional_supply": {"score": 4},  # 4/10
+        },
+    }
+    base.update(overrides)
+    return base
+
+
+def test_derive_strengths_high_ratio_dims():
+    """得分率 ≥80% 的维度成为亮点，按得分率降序且带维度名。"""
+    s = derive_strengths(_strength_report())
+    assert s[0] == "画像匹配（15/15 分，得分率 100%）"
+    assert "诉求穿透（15/15 分，得分率 100%）" in s
+    assert "情绪维度（16/20 分，得分率 80%）" in s
+    assert len(s) == 3  # 上限 3 条，候选充足不补足
+
+
+def test_derive_strengths_short_key_compat():
+    """短键存储（d1…）同样兼容。"""
+    r = _strength_report(
+        d_scores={"d1": {"score": 10}, "d2": {"score": 15}, "d3": {"score": 6}, "d4": {"score": 4}},
+        s_scores={"s1": {"score": 20}, "s2": {"score": 5}, "s3": {"score": 3}},
+    )
+    s = derive_strengths(r)
+    assert "情绪转化（10/10 分，得分率 100%）" in s
+    assert "画像匹配（15/15 分，得分率 100%）" in s
+    assert "情绪维度（20/20 分，得分率 100%）" in s
+
+
+def test_derive_strengths_comment_truncated():
+    """维度 comment 非空且超长时截断补"…"。"""
+    r = _strength_report(d_scores={
+        "d1_emotion_change": {"score": 10, "comment": "非常好的共情表达" * 10},
+        "d2_profile_match": {"score": 6},
+        "d3_problem_match": {"score": 6},
+        "d4_expectation_exceed": {"score": 4},
+    })
+    s = derive_strengths(r)
+    assert any(x.startswith("情绪转化（10/10 分，得分率 100%）：") and x.endswith("…") for x in s)
+
+
+def test_derive_strengths_na_skipped_and_fallback():
+    """N/A 维度跳过；候选不足时按确定性规则补足（合规健康/话术规范/持续接待）。"""
+    r = _strength_report(
+        d_scores={"d1_emotion_change": {"score": 5},
+                  "d2_profile_match": {"score": 6},
+                  "d3_problem_match": {"score": 5},
+                  "d4_expectation_exceed": {"score": 4}},
+        s_scores={"s1_emotion_stabilize": {"score": 8},
+                  "s2_problem_closure": {"score": 5},
+                  "s3_professional_supply": {"score": 3}},
+        na_dims=[{"key": "d1", "name": "情绪转化"}],
+        highlight_dialogue=[{"turn": 2, "issue_type": "x", "original_text": "y", "ai_rewrite": "z"}],
+    )
+    s = derive_strengths(r)
+    assert not any("情绪转化" in x for x in s)  # N/A 不进候选
+    assert "整体服务达标：无红灯违规，总分 72 分" in s  # 补足条
+    assert "全程持续接待：共 5 次回复，服务衔接完整" in s  # highlight 非空不补话术规范
+
+
+def test_derive_strengths_sub_item_fallback():
+    """S 维度整体未达标时，高分子项成为亮点。"""
+    r = _strength_report(s_scores={"s1_emotion_stabilize": {"score": 8, "sub_items": {
+        "empathy": {"score": 4},       # 4/4 → 亮点
+        "customized": {"score": 1},    # 1/5
+        "direct": {"score": 1},
+        "no_conflict": {"score": 1},
+        "vent_guide": {"score": 1},
+    }}})
+    s = derive_strengths(r)
+    assert any("情绪维度·共情回应" in x or "情绪维度·" in x for x in s)
+
+
+def test_derive_strengths_d4_action_special():
+    """D4 高分且含预判/掌控感动作时，用动作型措辞代替泛化措辞。"""
+    r = _strength_report(d_scores={
+        "d1_emotion_change": {"score": 5},
+        "d2_profile_match": {"score": 15, "derived_question": 0},
+        "d3_problem_match": {"score": 5},
+        "d4_expectation_exceed": {"score": 15, "derived_question": 2, "control_given": 1},
+    })
+    s = derive_strengths(r)
+    assert any("预期超越：预判衍生问题 2 个、掌控感动作 1 个" in x for x in s)
+
+
+def test_derive_strengths_empty_report():
+    """无任何维度数据（报告异常/字段缺失）→ 兜底补足且不抛异常。"""
+    s = derive_strengths({})
+    assert isinstance(s, list) and len(s) >= 1
