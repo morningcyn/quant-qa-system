@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from backend.db import repository
 from backend.db.database import get_db
 from backend.schemas.api import ParsePreviewIn
-from backend.services import multiparser, parser as parser_service
+from backend.services import multiparser, organizer, parser as parser_service
 
 router = APIRouter(prefix="/parse", tags=["parse"])
 
@@ -24,10 +24,21 @@ def preview(body: ParsePreviewIn, session: Session = Depends(get_db)):
     }
 
 
+@router.post("/organize")
+def organize(body: ParsePreviewIn, session: Session = Depends(get_db)):
+    """自动识别并整理：粘贴原始聊天记录 → 【客户】【助理A】标签文本（纯规则，不调 LLM）。
+
+    复用 parse_multi 的识别结果（同一份 name_map），仅做簇编号 + 序列化；
+    整理后文本再进 preview-multi 解析 100% 确定。"""
+    return organizer.organize_text(
+        body.raw_text, repository.list_assistants(session), multiparser.load_name_map()
+    )
+
+
 @router.post("/preview-multi")
 def preview_multi(body: ParsePreviewIn, session: Session = Depends(get_db)):
     """多人质检预览：完整会话 → 结构化消息 + 助理识别/归并 + 员工自动匹配（纯规则，不调 LLM）。"""
-    result = multiparser.parse_multi(body.raw_text, repository.list_assistants(session))
+    result = multiparser.parse_multi(body.raw_text, repository.list_assistants(session), multiparser.load_name_map())
     return {
         "fmt": result.fmt,
         "role_stats": result.role_stats,

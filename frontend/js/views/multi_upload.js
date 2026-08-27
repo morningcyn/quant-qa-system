@@ -252,9 +252,11 @@
             <input type="file" id="m-file" accept=".txt,.csv,.json" style="color:var(--text-2)">
             <div class="form-hint">支持 TXT / CSV / JSON 导出文件（UTF-8 编码）</div>
           </div>
+          <div id="m-organize-bar" style="display:none" class="mt-16"></div>
           <div id="m-preview" style="display:none" class="mt-16"></div>
           <div class="form-actions">
             <button class="btn btn-ghost" id="m-reset">清空</button>
+            <button class="btn btn-ghost" id="m-organize-btn">🪄 自动识别并整理</button>
             <button class="btn btn-ghost" id="m-preview-btn">② 解析预览</button>
             <button class="btn btn-primary" id="m-submit" disabled>③ 一键批量质检并生成总览</button>
           </div>
@@ -287,8 +289,68 @@
       app.querySelector("#m-reset").addEventListener("click", () => {
         app.querySelector("#m-text").value = "";
         clearPreview();
+        hideOrganizeBar();
         UI.toast("已清空", "info");
       });
+
+      // 🪄 自动识别并整理：粘贴原始记录 → 后端生成【客户】【助理A】标签文本 → 回填 textarea。
+      // 原始文本备份到 localStorage，整理结果条提供"恢复原文"（完整原始记录可追溯）。
+      const ORGANIZE_BACKUP_KEY = "multi_organize_backup";
+      async function doOrganize() {
+        const ta = app.querySelector("#m-text");
+        const text = ta.value.trim();
+        if (!text) { UI.toast("请先粘贴或上传完整聊天记录", "warning"); return; }
+        const btn = app.querySelector("#m-organize-btn");
+        btn.disabled = true;
+        try {
+          const data = await API.post("/api/parse/organize", { raw_text: text });
+          localStorage.setItem(ORGANIZE_BACKUP_KEY, text);
+          ta.value = data.organized_text;
+          clearPreview();
+          showOrganizeBar(data);
+          UI.toast(
+            `已自动识别并整理 ${data.message_count} 条消息（客户 ${data.role_stats["客"] || 0} 条 / 助理 ${data.role_stats["助"] || 0} 条 · 识别到 ${(data.assistants || []).length} 位助理）`,
+            "success"
+          );
+        } catch (err) {
+          UI.handleError(err, "自动识别失败");
+        } finally {
+          btn.disabled = false;
+        }
+      }
+
+      function showOrganizeBar(data) {
+        const bar = app.querySelector("#m-organize-bar");
+        const assistants = (data.assistants || [])
+          .map((a) => `${UI.esc(a.label)}→${UI.esc(a.canonical_name)}`)
+          .join("、");
+        bar.style.display = "";
+        bar.innerHTML = `
+          <div class="card">
+            <div class="card-title">🪄 已自动识别并整理（${data.message_count} 条消息 · 识别到 ${(data.assistants || []).length} 位助理）</div>
+            <div class="form-hint">
+              已为每条消息添加【客户】/【助理X】标签（标签对应：${assistants || "—"}）。
+              若多条【助理X】消息实际由<b>不同助理</b>回复（同名显示名无法自动区分）：直接把部分标签改成<b>助理真实姓名</b>，
+              如把【助理A】改成【段勇亮】、【徐艺桐】，再点「② 解析预览」——系统会自动匹配员工、分别归属。
+              原始记录已备份，可随时
+              <button class="btn btn-ghost btn-sm" id="m-organize-restore">恢复原文</button>
+            </div>
+          </div>`;
+        bar.querySelector("#m-organize-restore").addEventListener("click", () => {
+          const backup = localStorage.getItem(ORGANIZE_BACKUP_KEY);
+          if (backup === null) return;
+          app.querySelector("#m-text").value = backup;
+          clearPreview();
+          hideOrganizeBar();
+          UI.toast("已恢复原始记录", "info");
+        });
+      }
+
+      function hideOrganizeBar() {
+        const bar = app.querySelector("#m-organize-bar");
+        bar.style.display = "none";
+        bar.innerHTML = "";
+      }
 
       function clearPreview() {
         const box = app.querySelector("#m-preview");
@@ -364,8 +426,9 @@
         }
       }
 
+      app.querySelector("#m-organize-btn").addEventListener("click", doOrganize);
       app.querySelector("#m-preview-btn").addEventListener("click", doPreview);
-      app.querySelector("#m-text").addEventListener("input", () => { if (preview) clearPreview(); });
+      app.querySelector("#m-text").addEventListener("input", () => { if (preview) clearPreview(); hideOrganizeBar(); });
 
       app.querySelector("#m-submit").addEventListener("click", async () => {
         const raw = app.querySelector("#m-text").value.trim();

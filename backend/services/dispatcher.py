@@ -36,7 +36,9 @@ async def run_multi_inspection(
     多出的键或指向不存在员工的键均为错误（宁缺毋滥，不让规则猜测归属）。
     """
     # ① 解析 + 识别 + 分段（纯规则）
-    result = multiparser.parse_multi(raw_text, repository.list_assistants(session))
+    #    必须与预览（parse.preview_multi）用同一份 name_map：否则两次解析的
+    #    canonical_name 不一致，mapping 校验会误报"以下助理尚未指定归属员工"
+    result = multiparser.parse_multi(raw_text, repository.list_assistants(session), multiparser.load_name_map())
     clusters = result.clusters
     # ② 归属校验（前端预览已完成选择，后端二次兜底）
     names = {c.canonical_name for c in clusters}

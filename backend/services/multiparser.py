@@ -3,6 +3,7 @@
 import csv
 import io
 import json
+import os
 import re
 from dataclasses import dataclass, field
 
@@ -42,8 +43,21 @@ _SENDER_LINE_RE = re.compile(
 # 未知说话人行："名字：内容"
 _UNKNOWN_LINE_RE = re.compile(r"^(?P<name>[^：:\s]{1,16})\s*[:：]\s*(?P<text>.+)$")
 # 方括号裸名说话人："[名字] 内容"（非角色词；客户通常用 [客] 或块头格式，故视为助理候选）
-_BRACKET_NAME_RE = re.compile(r"^[\[【(（]\s*(?P<name>[^\]】)）：:\s]{1,24})\s*[\]】)）]\s*(?P<text>.+)$")
+# 内容可空（text=.*）——"【段勇亮】"独占一行（内容在下一行）也是合法消息行，不得被 ⑥ 吞并
+_BRACKET_NAME_RE = re.compile(r"^[\[【(（]\s*(?P<name>[^\]】)）：:\s]{1,24})\s*[\]】)）]\s*(?P<text>.*)$")
 
+
+def load_name_map() -> dict:
+    """显示名称→真实姓名映射表（data/name_map.json，如 {"韩珂龙头班": "段勇亮"}）。
+
+    预览（parse.preview_multi）与质检分发（dispatcher）必须用同一份映射，
+    否则两次解析的 canonical_name 不一致会导致归属校验报"尚未指定归属员工"。"""
+    try:
+        with open(os.path.join("data", "name_map.json"), encoding="utf-8") as f:
+            loaded = json.load(f)
+            return loaded if isinstance(loaded, dict) else {}
+    except (OSError, ValueError):
+        return {}
 # 自动角色推断用词（发送人含这些词素 → 助；刻意排除"老师"：客户也可能是"王老师"）
 _AUTO_ASSISTANT_WORDS = (
     "客服", "助理", "投顾", "顾问", "座席", "理财师", "人工", "热线", "agent", "assistant",
@@ -121,11 +135,13 @@ class MultiParseResult:
     raw_text: str = ""
 
 
-def parse_multi(raw_text: str, assistant_db=None) -> MultiParseResult:
+def parse_multi(raw_text: str, assistant_db=None, name_map=None) -> MultiParseResult:
     """解析完整聊天记录 → 结构化消息 + 助理识别/归并 + 员工匹配 + 服务分段。
 
     assistant_db：员工列表（鸭子类型，元素含 .id/.name/.employee_no 即可），
     缺省时不做员工匹配（assistant_id 全为 None，由前端人工指定）。
+    name_map：显示名称→真实姓名映射表（{"韩珂龙头班": "段勇亮"}），链接式头像行
+    缺失时兜底识别真实姓名。
     """
     text = (raw_text or "").strip()
     if not text:
@@ -137,7 +153,7 @@ def parse_multi(raw_text: str, assistant_db=None) -> MultiParseResult:
         messages = _parse_csv_messages(text, assistant_db)
         fmt = "csv"
     else:
-        messages = _parse_text_messages(text, assistant_db)
+        messages = _parse_text_messages(text, assistant_db, name_map)
         fmt = "text"
     if not messages:
         raise ParseError(
@@ -179,15 +195,19 @@ def _looks_like_csv(text: str) -> bool:
 
 # ---------- 文本逐行解析 ----------
 
-def _parse_text_messages(text: str, assistant_db) -> list[MultiMessage]:
-    """marker 文本 / 块头导出文本 / 微信双行格式逐行解析，时间戳原样保留。"""
+def _parse_text_messages(text: str, assistant_db, name_map=None) -> list[MultiMessage]:
+    """marker 文本 / 块头导出文本 / 微信双行格式逐行解析，时间戳原样保留。
+
+    name_map：显示名称→真实姓名映射（{"韩珂龙头班": "段勇亮"}），链接式头像行缺失时兜底。
+    """
     messages: list[MultiMessage] = []
     lines = text.splitlines()
     pending_name: tuple[str, str] | None = None  # (role, speaker_raw)：待下一内容行填充的 sender 轮
+    pending_empty_label = False  # 空标签行来源（【段勇亮】独占一行）：下一行若是新消息行则建空消息、不吞并
     preamble: list[str] = []
 
     def _flush_pending(content: str, line: str) -> None:
-        nonlocal pending_name
+        nonlocal pending_name, pending_empty_label
         role, spk = pending_name
         messages.append(
             MultiMessage(
@@ -197,6 +217,7 @@ def _parse_text_messages(text: str, assistant_db) -> list[MultiMessage]:
             )
         )
         pending_name = None
+        pending_empty_label = False
 
     _pending_ts: str | None = None
     _skip_next = False  # 三行式（时间戳行/发送人行/内容行）：跳过已并入 pending 的发送人行
@@ -224,8 +245,13 @@ def _parse_text_messages(text: str, assistant_db) -> list[MultiMessage]:
             if _TS_FULL_RE.match(line):
                 _pending_ts = line
                 continue
-            _flush_pending(line, raw_line)
-            continue
+            if pending_empty_label and _looks_like_labeled_turn(rest):
+                # 空标签行（【段勇亮】独占一行）的下一行是另一条标签/说话人行：
+                # 空标签轮先落库（内容留空，归属不丢），该行继续按新消息正常解析
+                _flush_pending("", raw_line)
+            else:
+                _flush_pending(line, raw_line)
+                continue
         # ① 块头声明行：客户|助理 + 昵称/姓名（冒号可选、行尾可粘连时间戳）。
         #    判定必须 下一行是时间戳 或 本行尾部带时间戳——否则"客户 你好"这类 marker 会被误吞
         #    （第一版 _MARKER_RE 分隔符可选，会把"客户 哈尔滨赢家1122"整个当 marker 轮）。
@@ -289,6 +315,22 @@ def _parse_text_messages(text: str, assistant_db) -> list[MultiMessage]:
             if messages:
                 messages[-1].timestamp = line
             continue
+        # ③d 三行式「发送人行 / 时间戳行 / 内容行」（导出文本常见格式，无角色词无冒号）：
+        #    裸发送人行 + 下一行是整行时间戳 → 进入 pending（时间戳行挂 ts、内容行走 flush）。
+        #    判据收紧：非短回应词、非称谓（"好的/王先生"等客户回复内容不可能是发送人行）。
+        #    name_map 兜底显示名称→真实姓名（命中拼"显示名+真实姓名"，_match_employee 互含命中员工）。
+        if next_is_ts and _SENDER_LINE_RE.match(rest):
+            if not _is_short_acknowledgment(rest) and not _HONORIFIC_RE.search(rest):
+                name = rest.strip()
+                real = (name_map or {}).get(name)
+                if real:
+                    spk = f"{name}{real}"
+                    role = _infer_role(real, assistant_db)
+                else:
+                    spk = name
+                    role = _infer_role(name, assistant_db)
+                pending_name = (role, spk)
+                continue
         # ④ 微信双行 sender 行：行首时间戳 + 发送人（无角色词无冒号）
         if m_ts and _NAME_LINE_RE.match(rest):
             name = rest.strip()
@@ -316,18 +358,26 @@ def _parse_text_messages(text: str, assistant_db) -> list[MultiMessage]:
                 )
             )
             continue
-        # ⑤b 方括号裸名说话人："[王萌] 内容"（非角色词 → 助理候选，匹配员工则绑定）
+        # ⑤b 方括号裸名说话人："[王萌] 内容"（非角色词 → 助理候选，匹配员工则绑定）。
+        #    空内容标签行（【段勇亮】独占一行、内容在下一行——手动改名时常出现）不落入 ⑥ 被吞，
+        #    进入 pending：下一行作为内容；若下一行是另一条标签/说话人行，本行建空消息保留归属。
         brk = _BRACKET_NAME_RE.match(rest)
         if brk:
             name, txt = brk.group("name").strip(), brk.group("text").strip()
             role = _infer_bracket_role(name, assistant_db)
-            messages.append(
-                MultiMessage(
-                    turn_no=len(messages) + 1, role=role, speaker=name,
-                    canonical_name=name if role == "助" else "客户",
-                    text=txt, timestamp=line_ts, raw_line=raw_line,
+            if txt:
+                messages.append(
+                    MultiMessage(
+                        turn_no=len(messages) + 1, role=role, speaker=name,
+                        canonical_name=name if role == "助" else "客户",
+                        text=txt, timestamp=line_ts, raw_line=raw_line,
+                    )
                 )
-            )
+            else:
+                pending_name = (role, name)
+                pending_empty_label = True
+                if line_ts:
+                    _pending_ts = line_ts
             continue
         # ⑥ 内容行 → 续入上一轮
         if messages:
@@ -503,6 +553,14 @@ def _looks_like_sender_line(nxt: str, assistant_db) -> bool:
         return False
     cn = _canonicalize(nxt)
     return _is_chinese_name(cn) and len(cn) <= 4
+
+
+def _looks_like_labeled_turn(rest: str) -> bool:
+    """行是否为新的标签/说话人消息行（marker sep 或方括号裸名）——空标签行 pending 时据此决定不吞并。"""
+    m = match_marker(rest)
+    if m and m.get("sep") and normalize_role(m["role"]):
+        return True
+    return bool(_BRACKET_NAME_RE.match(rest))
 
 
 def _infer_bracket_role(name: str, assistant_db) -> str:

@@ -145,6 +145,38 @@ class TestRunMultiInspection:
         assert len(out["reports"]) == 1 and out["errors"] == []
         assert out["reports"][0]["reply_count"] == 1
 
+    def test_three_line_display_name_same_name_map_as_preview(self, session, monkeypatch):
+        """预览与提交一致性：三行式显示名记录，dispatcher 必须与预览用同一份 name_map。
+
+        回归：dispatcher 原先不加载 name_map → 后端重新解析出"韩珂龙头班"簇，
+        mapping["段勇亮"] 对不上 → 误报"以下助理尚未指定归属员工"。"""
+        from backend.services import multiparser
+
+        raw = (
+            "邯郸赢家0878\n2026-07-03 13:12:42\n你好韩老师！300166提醒加仓没看到现在能加吗？\n\n"
+            "韩珂龙头班\n2026-07-03 14:32:24\n可以按照中线模式低吸加仓5%\n\n"
+            "邯郸赢家0878\n2026-07-10 13:31:50\n韩老师好！000420现在能加仓吗？"
+        )
+        dyl = repository.create_assistant(session, "段勇亮", "E003", "standard")
+        monkeypatch.setattr(multiparser, "load_name_map", lambda: {"韩珂龙头班": "段勇亮"})
+
+        # 预览视角（parse.preview_multi 同款）：canonical_name = 段勇亮（员工匹配）
+        prev = multiparser.parse_multi(raw, repository.list_assistants(session), multiparser.load_name_map())
+        assert [c.canonical_name for c in prev.clusters] == ["段勇亮"]
+
+        # 提交视角：dispatcher 内部加载同一份 name_map → mapping 覆盖，不再误报未归属
+        client = MockLLMByUserClient(
+            [
+                ("请按系统提示输出总览 JSON", overview_llm_json()),
+                ("本次评估对象：段勇亮", valid_llm_json()),
+            ]
+        )
+        out = asyncio.run(
+            dispatcher.run_multi_inspection(session, raw, "t", {"段勇亮": dyl.id}, client=client, cfg={})
+        )
+        assert out["errors"] == []
+        assert out["reports"][0]["assistant_name"] == "段勇亮"
+
     def test_overview_fallback_uses_red_reasons(self, session, two_assistants):
         """规则降级：红灯根因进入主要问题，且判定为"否"。"""
         client = MockLLMByUserClient(

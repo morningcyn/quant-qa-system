@@ -394,3 +394,63 @@ class TestCsvJson:
         assert r.fmt == "json"
         assert r.messages[0].timestamp == "2026-08-24 10:00"
         assert r.messages[1].role == "助"
+
+
+# ---------- 三行式「发送人行 / 时间戳行 / 内容行」（用户真实导出格式，无链接无角色词无冒号） ----------
+
+class TestThreeLineSenderTsContent:
+    """真实格式：邯郸赢家0878 / 2026-07-03 13:12:42 / 内容 三行一条消息。"""
+
+    def test_three_line_sender_ts_content(self):
+        raw = (
+            "邯郸赢家0878\n2026-07-03 13:12:42\n你好韩老师！300166提醒加仓没看到现在能加吗？\n\n"
+            "韩珂龙头班\n2026-07-03 14:32:24\n可以按照中线模式低吸加仓5%，不要追涨就好\n\n"
+            "邯郸赢家0878\n2026-07-10 13:31:50\n韩老师好！000420现在能加仓吗？"
+        )
+        r = parse_multi(raw, EMPLOYEES)
+        m = r.messages
+        assert len(m) == 3
+        assert (m[0].role, m[0].speaker) == ("客", "邯郸赢家0878")
+        assert m[0].timestamp == "2026-07-03 13:12:42"
+        assert m[0].text == "你好韩老师！300166提醒加仓没看到现在能加吗？"
+        assert (m[1].role, m[1].speaker) == ("助", "韩珂龙头班")  # 未匹配员工，显示名直接为 speaker
+        assert m[1].timestamp == "2026-07-03 14:32:24"
+        assert m[1].text == "可以按照中线模式低吸加仓5%，不要追涨就好"
+        assert (m[2].role, m[2].speaker) == ("客", "邯郸赢家0878")
+        assert m[2].timestamp == "2026-07-10 13:31:50"
+
+    def test_three_line_with_name_map_real_name(self):
+        """三行式 + 映射表兜底：显示名"韩珂龙头班" → 真实姓名"段勇亮" → 员工匹配。"""
+        raw = (
+            "邯郸赢家0878\n2026-07-03 13:12:42\n你好韩老师！300166提醒加仓没看到现在能加吗？\n\n"
+            "韩珂龙头班\n2026-07-03 14:32:24\n可以按照中线模式低吸加仓5%，不要追涨就好\n\n"
+            "邯郸赢家0878\n2026-07-10 13:31:50\n韩老师好！000420现在能加仓吗？\n\n"
+            "韩珂龙头班\n2026-07-10 16:06:51\n没有太好的符合模式的机会不要着急乱做加仓"
+        )
+        db = EMPLOYEES + [Emp(3, "段勇亮", "E003")]
+        r = parse_multi(raw, db, {"韩珂龙头班": "段勇亮"})
+        m = r.messages
+        assert len(m) == 4
+        assert m[1].speaker == "韩珂龙头班段勇亮"
+        assert m[1].role == "助"
+        assert m[1].assistant_id == 3
+        assert m[1].canonical_name == "段勇亮"
+        assert m[1].timestamp == "2026-07-03 14:32:24"
+        assert m[3].speaker == "韩珂龙头班段勇亮"
+        c = r.clusters[0]
+        assert c.canonical_name == "段勇亮"
+        assert c.reply_turn_nos == [2, 4]
+
+    def test_three_line_short_ack_content_not_sender(self):
+        """三行式内容行是短回应（好的/谢谢）：内容照常入轮，不得误判为发送人。"""
+        raw = (
+            "邯郸赢家0878\n2026-07-03 13:12:42\n好的老师\n\n"
+            "韩珂龙头班\n2026-07-03 14:32:24\n谢谢支持"
+        )
+        r = parse_multi(raw, EMPLOYEES)
+        m = r.messages
+        assert len(m) == 2
+        assert m[0].role == "客" and m[0].speaker == "邯郸赢家0878"
+        assert m[0].text == "好的老师"
+        assert m[1].role == "助" and m[1].speaker == "韩珂龙头班"
+        assert m[1].text == "谢谢支持"
