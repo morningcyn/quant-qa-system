@@ -98,6 +98,7 @@ imports:
  &#8226;   <a href="#backend.api">backend.api</a>
  &#8226;   <a href="#backend.api.assistants">backend.api.assistants</a>
  &#8226;   <a href="#backend.api.inspections">backend.api.inspections</a>
+ &#8226;   <a href="#backend.api.overviews">backend.api.overviews</a>
  &#8226;   <a href="#backend.api.parse">backend.api.parse</a>
  &#8226;   <a href="#backend.api.reports">backend.api.reports</a>
  &#8226;   <a href="#backend.api.settings">backend.api.settings</a>
@@ -111,13 +112,17 @@ imports:
  &#8226;   <a href="#backend.schemas">backend.schemas</a>
  &#8226;   <a href="#backend.schemas.api">backend.schemas.api</a>
  &#8226;   <a href="#backend.schemas.inspection">backend.schemas.inspection</a>
+ &#8226;   <a href="#backend.schemas.overview">backend.schemas.overview</a>
  &#8226;   <a href="#backend.services">backend.services</a>
+ &#8226;   <a href="#backend.services.dispatcher">backend.services.dispatcher</a>
  &#8226;   <a href="#backend.services.llm">backend.services.llm</a>
  &#8226;   <a href="#backend.services.llm.anthropic_client">backend.services.llm.anthropic_client</a>
  &#8226;   <a href="#backend.services.llm.base">backend.services.llm.base</a>
  &#8226;   <a href="#backend.services.llm.factory">backend.services.llm.factory</a>
  &#8226;   <a href="#backend.services.llm.json_guard">backend.services.llm.json_guard</a>
  &#8226;   <a href="#backend.services.llm.openai_compat">backend.services.llm.openai_compat</a>
+ &#8226;   <a href="#backend.services.multiparser">backend.services.multiparser</a>
+ &#8226;   <a href="#backend.services.organizer">backend.services.organizer</a>
  &#8226;   <a href="#backend.services.parser">backend.services.parser</a>
  &#8226;   <a href="#backend.services.pipeline">backend.services.pipeline</a>
  &#8226;   <a href="#backend.services.prompts">backend.services.prompts</a>
@@ -6155,6 +6160,7 @@ imported by:
  &#8226;   <a href="#asyncio.unix_events">asyncio.unix_events</a>
  &#8226;   <a href="#asyncio.windows_events">asyncio.windows_events</a>
  &#8226;   <a href="#asyncio.windows_utils">asyncio.windows_utils</a>
+ &#8226;   <a href="#backend.services.dispatcher">backend.services.dispatcher</a>
  &#8226;   <a href="#bottle">bottle</a>
  &#8226;   <a href="#fastapi.dependencies.models">fastapi.dependencies.models</a>
  &#8226;   <a href="#httpx._transports.asgi">httpx._transports.asgi</a>
@@ -7133,6 +7139,7 @@ imports:
  &#8226;   <a href="#backend.api">backend.api</a>
  &#8226;   <a href="#backend.api.assistants">backend.api.assistants</a>
  &#8226;   <a href="#backend.api.inspections">backend.api.inspections</a>
+ &#8226;   <a href="#backend.api.overviews">backend.api.overviews</a>
  &#8226;   <a href="#backend.api.parse">backend.api.parse</a>
  &#8226;   <a href="#backend.api.reports">backend.api.reports</a>
  &#8226;   <a href="#backend.api.settings">backend.api.settings</a>
@@ -7145,6 +7152,7 @@ imported by:
     <a href="#backend.api">backend.api</a>
  &#8226;   <a href="#backend.api.assistants">backend.api.assistants</a>
  &#8226;   <a href="#backend.api.inspections">backend.api.inspections</a>
+ &#8226;   <a href="#backend.api.overviews">backend.api.overviews</a>
  &#8226;   <a href="#backend.api.parse">backend.api.parse</a>
  &#8226;   <a href="#backend.api.reports">backend.api.reports</a>
  &#8226;   <a href="#backend.api.settings">backend.api.settings</a>
@@ -7192,10 +7200,37 @@ imports:
  &#8226;   <a href="#backend.db.repository">backend.db.repository</a>
  &#8226;   <a href="#backend.schemas.api">backend.schemas.api</a>
  &#8226;   <a href="#backend.services">backend.services</a>
+ &#8226;   <a href="#backend.services.dispatcher">backend.services.dispatcher</a>
  &#8226;   <a href="#backend.services.pipeline">backend.services.pipeline</a>
  &#8226;   <a href="#backend.services.report">backend.services.report</a>
  &#8226;   <a href="#backend.utils.errors">backend.utils.errors</a>
  &#8226;   <a href="#fastapi">fastapi</a>
+ &#8226;   <a href="#sqlalchemy.orm">sqlalchemy.orm</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#backend.api">backend.api</a>
+ &#8226;   <a href="#run.py">run.py</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="backend.api.overviews"></a>
+  <a target="code" href="///C:/Users/Administrator/Desktop/quant-qa-system/backend/api/overviews.py" type="text/plain"><tt>backend.api.overviews</tt></a>
+<span class="moduletype">SourceModule</span>  <div class="import">
+imports:
+    <a href="#backend.api">backend.api</a>
+ &#8226;   <a href="#backend.db">backend.db</a>
+ &#8226;   <a href="#backend.db.database">backend.db.database</a>
+ &#8226;   <a href="#backend.db.repository">backend.db.repository</a>
+ &#8226;   <a href="#backend.services">backend.services</a>
+ &#8226;   <a href="#backend.services.report">backend.services.report</a>
+ &#8226;   <a href="#backend.utils.errors">backend.utils.errors</a>
+ &#8226;   <a href="#fastapi">fastapi</a>
+ &#8226;   <a href="#json">json</a>
  &#8226;   <a href="#sqlalchemy.orm">sqlalchemy.orm</a>
 
   </div>
@@ -7214,9 +7249,13 @@ imported by:
 <span class="moduletype">SourceModule</span>  <div class="import">
 imports:
     <a href="#backend.api">backend.api</a>
+ &#8226;   <a href="#backend.db">backend.db</a>
  &#8226;   <a href="#backend.db.database">backend.db.database</a>
+ &#8226;   <a href="#backend.db.repository">backend.db.repository</a>
  &#8226;   <a href="#backend.schemas.api">backend.schemas.api</a>
  &#8226;   <a href="#backend.services">backend.services</a>
+ &#8226;   <a href="#backend.services.multiparser">backend.services.multiparser</a>
+ &#8226;   <a href="#backend.services.organizer">backend.services.organizer</a>
  &#8226;   <a href="#backend.services.parser">backend.services.parser</a>
  &#8226;   <a href="#fastapi">fastapi</a>
  &#8226;   <a href="#sqlalchemy.orm">sqlalchemy.orm</a>
@@ -7339,11 +7378,14 @@ imports:
 imported by:
     <a href="#backend.api.assistants">backend.api.assistants</a>
  &#8226;   <a href="#backend.api.inspections">backend.api.inspections</a>
+ &#8226;   <a href="#backend.api.overviews">backend.api.overviews</a>
+ &#8226;   <a href="#backend.api.parse">backend.api.parse</a>
  &#8226;   <a href="#backend.api.reports">backend.api.reports</a>
  &#8226;   <a href="#backend.api.stats">backend.api.stats</a>
  &#8226;   <a href="#backend.db.database">backend.db.database</a>
  &#8226;   <a href="#backend.db.models">backend.db.models</a>
  &#8226;   <a href="#backend.db.repository">backend.db.repository</a>
+ &#8226;   <a href="#backend.services.dispatcher">backend.services.dispatcher</a>
  &#8226;   <a href="#backend.services.llm.factory">backend.services.llm.factory</a>
  &#8226;   <a href="#backend.services.pipeline">backend.services.pipeline</a>
  &#8226;   <a href="#backend.services.report">backend.services.report</a>
@@ -7372,6 +7414,7 @@ imports:
 imported by:
     <a href="#backend.api.assistants">backend.api.assistants</a>
  &#8226;   <a href="#backend.api.inspections">backend.api.inspections</a>
+ &#8226;   <a href="#backend.api.overviews">backend.api.overviews</a>
  &#8226;   <a href="#backend.api.parse">backend.api.parse</a>
  &#8226;   <a href="#backend.api.reports">backend.api.reports</a>
  &#8226;   <a href="#backend.api.settings">backend.api.settings</a>
@@ -7423,9 +7466,12 @@ imports:
 imported by:
     <a href="#backend.api.assistants">backend.api.assistants</a>
  &#8226;   <a href="#backend.api.inspections">backend.api.inspections</a>
+ &#8226;   <a href="#backend.api.overviews">backend.api.overviews</a>
+ &#8226;   <a href="#backend.api.parse">backend.api.parse</a>
  &#8226;   <a href="#backend.api.reports">backend.api.reports</a>
  &#8226;   <a href="#backend.api.stats">backend.api.stats</a>
  &#8226;   <a href="#backend.db">backend.db</a>
+ &#8226;   <a href="#backend.services.dispatcher">backend.services.dispatcher</a>
  &#8226;   <a href="#backend.services.llm.factory">backend.services.llm.factory</a>
  &#8226;   <a href="#backend.services.pipeline">backend.services.pipeline</a>
  &#8226;   <a href="#backend.services.report">backend.services.report</a>
@@ -7473,6 +7519,7 @@ imports:
 imported by:
     <a href="#backend.schemas.api">backend.schemas.api</a>
  &#8226;   <a href="#backend.schemas.inspection">backend.schemas.inspection</a>
+ &#8226;   <a href="#backend.schemas.overview">backend.schemas.overview</a>
  &#8226;   <a href="#run.py">run.py</a>
 
   </div>
@@ -7522,12 +7569,34 @@ imported by:
 </div>
 
 <div class="node">
+  <a name="backend.schemas.overview"></a>
+  <a target="code" href="///C:/Users/Administrator/Desktop/quant-qa-system/backend/schemas/overview.py" type="text/plain"><tt>backend.schemas.overview</tt></a>
+<span class="moduletype">SourceModule</span>  <div class="import">
+imports:
+    <a href="#backend.schemas">backend.schemas</a>
+ &#8226;   <a href="#pydantic">pydantic</a>
+ &#8226;   <a href="#pydantic.BaseModel">pydantic.BaseModel</a>
+ &#8226;   <a href="#typing">typing</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#backend.services.dispatcher">backend.services.dispatcher</a>
+ &#8226;   <a href="#run.py">run.py</a>
+
+  </div>
+
+</div>
+
+<div class="node">
   <a name="backend.services"></a>
   <a target="code" href="///C:/Users/Administrator/Desktop/quant-qa-system/backend/services/__init__.py" type="text/plain"><tt>backend.services</tt></a>
 <span class="moduletype">Package</span>  <div class="import">
 imports:
     <a href="#backend">backend</a>
- &#8226;   <a href="#backend.services.parser">backend.services.parser</a>
+ &#8226;   <a href="#backend.services.dispatcher">backend.services.dispatcher</a>
+ &#8226;   <a href="#backend.services.multiparser">backend.services.multiparser</a>
+ &#8226;   <a href="#backend.services.organizer">backend.services.organizer</a>
  &#8226;   <a href="#backend.services.pipeline">backend.services.pipeline</a>
  &#8226;   <a href="#backend.services.prompts">backend.services.prompts</a>
  &#8226;   <a href="#backend.services.report">backend.services.report</a>
@@ -7537,17 +7606,54 @@ imports:
   <div class="import">
 imported by:
     <a href="#backend.api.inspections">backend.api.inspections</a>
+ &#8226;   <a href="#backend.api.overviews">backend.api.overviews</a>
  &#8226;   <a href="#backend.api.parse">backend.api.parse</a>
  &#8226;   <a href="#backend.api.reports">backend.api.reports</a>
  &#8226;   <a href="#backend.api.settings">backend.api.settings</a>
  &#8226;   <a href="#backend.api.stats">backend.api.stats</a>
+ &#8226;   <a href="#backend.services.dispatcher">backend.services.dispatcher</a>
  &#8226;   <a href="#backend.services.llm">backend.services.llm</a>
+ &#8226;   <a href="#backend.services.multiparser">backend.services.multiparser</a>
+ &#8226;   <a href="#backend.services.organizer">backend.services.organizer</a>
  &#8226;   <a href="#backend.services.parser">backend.services.parser</a>
  &#8226;   <a href="#backend.services.pipeline">backend.services.pipeline</a>
  &#8226;   <a href="#backend.services.prompts">backend.services.prompts</a>
  &#8226;   <a href="#backend.services.report">backend.services.report</a>
  &#8226;   <a href="#backend.services.scoring">backend.services.scoring</a>
  &#8226;   <a href="#backend.services.settings_service">backend.services.settings_service</a>
+ &#8226;   <a href="#run.py">run.py</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="backend.services.dispatcher"></a>
+  <a target="code" href="///C:/Users/Administrator/Desktop/quant-qa-system/backend/services/dispatcher.py" type="text/plain"><tt>backend.services.dispatcher</tt></a>
+<span class="moduletype">SourceModule</span>  <div class="import">
+imports:
+    <a href="#asyncio">asyncio</a>
+ &#8226;   <a href="#backend.db">backend.db</a>
+ &#8226;   <a href="#backend.db.repository">backend.db.repository</a>
+ &#8226;   <a href="#backend.schemas.overview">backend.schemas.overview</a>
+ &#8226;   <a href="#backend.services">backend.services</a>
+ &#8226;   <a href="#backend.services.llm">backend.services.llm</a>
+ &#8226;   <a href="#backend.services.llm.base">backend.services.llm.base</a>
+ &#8226;   <a href="#backend.services.llm.factory">backend.services.llm.factory</a>
+ &#8226;   <a href="#backend.services.llm.json_guard">backend.services.llm.json_guard</a>
+ &#8226;   <a href="#backend.services.multiparser">backend.services.multiparser</a>
+ &#8226;   <a href="#backend.services.pipeline">backend.services.pipeline</a>
+ &#8226;   <a href="#backend.services.prompts">backend.services.prompts</a>
+ &#8226;   <a href="#backend.services.report">backend.services.report</a>
+ &#8226;   <a href="#backend.utils.errors">backend.utils.errors</a>
+ &#8226;   <a href="#sqlalchemy.orm">sqlalchemy.orm</a>
+ &#8226;   <a href="#uuid">uuid</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#backend.api.inspections">backend.api.inspections</a>
+ &#8226;   <a href="#backend.services">backend.services</a>
  &#8226;   <a href="#run.py">run.py</a>
 
   </div>
@@ -7566,7 +7672,8 @@ imports:
   </div>
   <div class="import">
 imported by:
-    <a href="#backend.services.llm.anthropic_client">backend.services.llm.anthropic_client</a>
+    <a href="#backend.services.dispatcher">backend.services.dispatcher</a>
+ &#8226;   <a href="#backend.services.llm.anthropic_client">backend.services.llm.anthropic_client</a>
  &#8226;   <a href="#backend.services.llm.base">backend.services.llm.base</a>
  &#8226;   <a href="#backend.services.llm.factory">backend.services.llm.factory</a>
  &#8226;   <a href="#backend.services.llm.json_guard">backend.services.llm.json_guard</a>
@@ -7609,7 +7716,8 @@ imports:
   </div>
   <div class="import">
 imported by:
-    <a href="#backend.services.llm.anthropic_client">backend.services.llm.anthropic_client</a>
+    <a href="#backend.services.dispatcher">backend.services.dispatcher</a>
+ &#8226;   <a href="#backend.services.llm.anthropic_client">backend.services.llm.anthropic_client</a>
  &#8226;   <a href="#backend.services.llm.factory">backend.services.llm.factory</a>
  &#8226;   <a href="#backend.services.llm.json_guard">backend.services.llm.json_guard</a>
  &#8226;   <a href="#backend.services.llm.openai_compat">backend.services.llm.openai_compat</a>
@@ -7640,7 +7748,8 @@ imports:
   </div>
   <div class="import">
 imported by:
-    <a href="#backend.services.llm">backend.services.llm</a>
+    <a href="#backend.services.dispatcher">backend.services.dispatcher</a>
+ &#8226;   <a href="#backend.services.llm">backend.services.llm</a>
  &#8226;   <a href="#backend.services.pipeline">backend.services.pipeline</a>
  &#8226;   <a href="#backend.services.settings_service">backend.services.settings_service</a>
  &#8226;   <a href="#run.py">run.py</a>
@@ -7665,7 +7774,8 @@ imports:
   </div>
   <div class="import">
 imported by:
-    <a href="#backend.services.llm">backend.services.llm</a>
+    <a href="#backend.services.dispatcher">backend.services.dispatcher</a>
+ &#8226;   <a href="#backend.services.llm">backend.services.llm</a>
  &#8226;   <a href="#backend.services.pipeline">backend.services.pipeline</a>
  &#8226;   <a href="#run.py">run.py</a>
 
@@ -7693,6 +7803,55 @@ imported by:
 </div>
 
 <div class="node">
+  <a name="backend.services.multiparser"></a>
+  <a target="code" href="///C:/Users/Administrator/Desktop/quant-qa-system/backend/services/multiparser.py" type="text/plain"><tt>backend.services.multiparser</tt></a>
+<span class="moduletype">SourceModule</span>  <div class="import">
+imports:
+    <a href="#backend.services">backend.services</a>
+ &#8226;   <a href="#backend.services.parser">backend.services.parser</a>
+ &#8226;   <a href="#csv">csv</a>
+ &#8226;   <a href="#dataclasses">dataclasses</a>
+ &#8226;   <a href="#io">io</a>
+ &#8226;   <a href="#json">json</a>
+ &#8226;   <a href="#os">os</a>
+ &#8226;   <a href="#re">re</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#backend.api.parse">backend.api.parse</a>
+ &#8226;   <a href="#backend.services">backend.services</a>
+ &#8226;   <a href="#backend.services.dispatcher">backend.services.dispatcher</a>
+ &#8226;   <a href="#backend.services.organizer">backend.services.organizer</a>
+ &#8226;   <a href="#run.py">run.py</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="backend.services.organizer"></a>
+  <a target="code" href="///C:/Users/Administrator/Desktop/quant-qa-system/backend/services/organizer.py" type="text/plain"><tt>backend.services.organizer</tt></a>
+<span class="moduletype">SourceModule</span>  <div class="import">
+imports:
+    <a href="#backend.services">backend.services</a>
+ &#8226;   <a href="#backend.services.multiparser">backend.services.multiparser</a>
+ &#8226;   <a href="#backend.services.parser">backend.services.parser</a>
+ &#8226;   <a href="#backend.utils.errors">backend.utils.errors</a>
+ &#8226;   <a href="#string">string</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#backend.api.parse">backend.api.parse</a>
+ &#8226;   <a href="#backend.services">backend.services</a>
+ &#8226;   <a href="#run.py">run.py</a>
+
+  </div>
+
+</div>
+
+<div class="node">
   <a name="backend.services.parser"></a>
   <a target="code" href="///C:/Users/Administrator/Desktop/quant-qa-system/backend/services/parser.py" type="text/plain"><tt>backend.services.parser</tt></a>
 <span class="moduletype">SourceModule</span>  <div class="import">
@@ -7709,7 +7868,8 @@ imports:
   <div class="import">
 imported by:
     <a href="#backend.api.parse">backend.api.parse</a>
- &#8226;   <a href="#backend.services">backend.services</a>
+ &#8226;   <a href="#backend.services.multiparser">backend.services.multiparser</a>
+ &#8226;   <a href="#backend.services.organizer">backend.services.organizer</a>
  &#8226;   <a href="#backend.services.pipeline">backend.services.pipeline</a>
  &#8226;   <a href="#backend.services.scoring">backend.services.scoring</a>
  &#8226;   <a href="#run.py">run.py</a>
@@ -7745,6 +7905,7 @@ imports:
 imported by:
     <a href="#backend.api.inspections">backend.api.inspections</a>
  &#8226;   <a href="#backend.services">backend.services</a>
+ &#8226;   <a href="#backend.services.dispatcher">backend.services.dispatcher</a>
  &#8226;   <a href="#run.py">run.py</a>
 
   </div>
@@ -7763,6 +7924,7 @@ imports:
   <div class="import">
 imported by:
     <a href="#backend.services">backend.services</a>
+ &#8226;   <a href="#backend.services.dispatcher">backend.services.dispatcher</a>
  &#8226;   <a href="#backend.services.pipeline">backend.services.pipeline</a>
  &#8226;   <a href="#run.py">run.py</a>
 
@@ -7787,9 +7949,11 @@ imports:
   <div class="import">
 imported by:
     <a href="#backend.api.inspections">backend.api.inspections</a>
+ &#8226;   <a href="#backend.api.overviews">backend.api.overviews</a>
  &#8226;   <a href="#backend.api.reports">backend.api.reports</a>
  &#8226;   <a href="#backend.api.stats">backend.api.stats</a>
  &#8226;   <a href="#backend.services">backend.services</a>
+ &#8226;   <a href="#backend.services.dispatcher">backend.services.dispatcher</a>
  &#8226;   <a href="#run.py">run.py</a>
 
   </div>
@@ -7916,9 +8080,12 @@ imports:
 imported by:
     <a href="#backend.api.assistants">backend.api.assistants</a>
  &#8226;   <a href="#backend.api.inspections">backend.api.inspections</a>
+ &#8226;   <a href="#backend.api.overviews">backend.api.overviews</a>
  &#8226;   <a href="#backend.api.reports">backend.api.reports</a>
  &#8226;   <a href="#backend.api.stats">backend.api.stats</a>
  &#8226;   <a href="#backend.main">backend.main</a>
+ &#8226;   <a href="#backend.services.dispatcher">backend.services.dispatcher</a>
+ &#8226;   <a href="#backend.services.organizer">backend.services.organizer</a>
  &#8226;   <a href="#backend.services.parser">backend.services.parser</a>
  &#8226;   <a href="#backend.services.pipeline">backend.services.pipeline</a>
  &#8226;   <a href="#backend.services.settings_service">backend.services.settings_service</a>
@@ -10542,7 +10709,8 @@ imports:
   </div>
   <div class="import">
 imported by:
-    <a href="#backend.services.parser">backend.services.parser</a>
+    <a href="#backend.services.multiparser">backend.services.multiparser</a>
+ &#8226;   <a href="#backend.services.parser">backend.services.parser</a>
  &#8226;   <a href="#importlib.metadata">importlib.metadata</a>
  &#8226;   <a href="#setuptools._vendor.importlib_metadata">setuptools._vendor.importlib_metadata</a>
  &#8226;   <a href="#setuptools._vendor.wheel.wheelfile">setuptools._vendor.wheel.wheelfile</a>
@@ -10880,6 +11048,7 @@ imported by:
  &#8226;   <a href="#anyio.streams.memory">anyio.streams.memory</a>
  &#8226;   <a href="#anyio.streams.stapled">anyio.streams.stapled</a>
  &#8226;   <a href="#anyio.streams.tls">anyio.streams.tls</a>
+ &#8226;   <a href="#backend.services.multiparser">backend.services.multiparser</a>
  &#8226;   <a href="#backend.services.parser">backend.services.parser</a>
  &#8226;   <a href="#clr_loader.types">clr_loader.types</a>
  &#8226;   <a href="#clr_loader.util.runtime_spec">clr_loader.util.runtime_spec</a>
@@ -14411,6 +14580,7 @@ imported by:
     <a href="#backend.api">backend.api</a>
  &#8226;   <a href="#backend.api.assistants">backend.api.assistants</a>
  &#8226;   <a href="#backend.api.inspections">backend.api.inspections</a>
+ &#8226;   <a href="#backend.api.overviews">backend.api.overviews</a>
  &#8226;   <a href="#backend.api.parse">backend.api.parse</a>
  &#8226;   <a href="#backend.api.reports">backend.api.reports</a>
  &#8226;   <a href="#backend.api.settings">backend.api.settings</a>
@@ -19093,6 +19263,7 @@ imported by:
  &#8226;   <a href="#anyio.abc._sockets">anyio.abc._sockets</a>
  &#8226;   <a href="#asyncio.proactor_events">asyncio.proactor_events</a>
  &#8226;   <a href="#asyncio.unix_events">asyncio.unix_events</a>
+ &#8226;   <a href="#backend.services.multiparser">backend.services.multiparser</a>
  &#8226;   <a href="#backend.services.parser">backend.services.parser</a>
  &#8226;   <a href="#base64">base64</a>
  &#8226;   <a href="#bottle">bottle</a>
@@ -19407,9 +19578,11 @@ imports:
   <div class="import">
 imported by:
     <a href="#PyInstaller.utils.hooks.conda">PyInstaller.utils.hooks.conda</a>
+ &#8226;   <a href="#backend.api.overviews">backend.api.overviews</a>
  &#8226;   <a href="#backend.db.database">backend.db.database</a>
  &#8226;   <a href="#backend.db.repository">backend.db.repository</a>
  &#8226;   <a href="#backend.services.llm.json_guard">backend.services.llm.json_guard</a>
+ &#8226;   <a href="#backend.services.multiparser">backend.services.multiparser</a>
  &#8226;   <a href="#backend.services.parser">backend.services.parser</a>
  &#8226;   <a href="#backend.services.pipeline">backend.services.pipeline</a>
  &#8226;   <a href="#backend.services.report">backend.services.report</a>
@@ -21174,6 +21347,7 @@ imported by:
  &#8226;   <a href="#asyncio.selector_events">asyncio.selector_events</a>
  &#8226;   <a href="#asyncio.unix_events">asyncio.unix_events</a>
  &#8226;   <a href="#asyncio.windows_utils">asyncio.windows_utils</a>
+ &#8226;   <a href="#backend.services.multiparser">backend.services.multiparser</a>
  &#8226;   <a href="#bottle">bottle</a>
  &#8226;   <a href="#bz2">bz2</a>
  &#8226;   <a href="#cffi._imp_emulation">cffi._imp_emulation</a>
@@ -22550,6 +22724,7 @@ imports:
 imported by:
     <a href="#backend.schemas.api">backend.schemas.api</a>
  &#8226;   <a href="#backend.schemas.inspection">backend.schemas.inspection</a>
+ &#8226;   <a href="#backend.schemas.overview">backend.schemas.overview</a>
  &#8226;   <a href="#backend.services.llm.json_guard">backend.services.llm.json_guard</a>
  &#8226;   <a href="#backend.services.pipeline">backend.services.pipeline</a>
  &#8226;   <a href="#fastapi._compat.shared">fastapi._compat.shared</a>
@@ -22626,6 +22801,7 @@ imported by:
 imported by:
     <a href="#backend.schemas.api">backend.schemas.api</a>
  &#8226;   <a href="#backend.schemas.inspection">backend.schemas.inspection</a>
+ &#8226;   <a href="#backend.schemas.overview">backend.schemas.overview</a>
  &#8226;   <a href="#backend.services.llm.json_guard">backend.services.llm.json_guard</a>
  &#8226;   <a href="#backend.services.pipeline">backend.services.pipeline</a>
  &#8226;   <a href="#fastapi._compat.shared">fastapi._compat.shared</a>
@@ -34526,6 +34702,7 @@ imported by:
  &#8226;   <a href="#argparse">argparse</a>
  &#8226;   <a href="#ast">ast</a>
  &#8226;   <a href="#backend.services.llm.json_guard">backend.services.llm.json_guard</a>
+ &#8226;   <a href="#backend.services.multiparser">backend.services.multiparser</a>
  &#8226;   <a href="#backend.services.parser">backend.services.parser</a>
  &#8226;   <a href="#base64">base64</a>
  &#8226;   <a href="#bottle">bottle</a>
@@ -43260,6 +43437,7 @@ imports:
 imported by:
     <a href="#backend.api.assistants">backend.api.assistants</a>
  &#8226;   <a href="#backend.api.inspections">backend.api.inspections</a>
+ &#8226;   <a href="#backend.api.overviews">backend.api.overviews</a>
  &#8226;   <a href="#backend.api.parse">backend.api.parse</a>
  &#8226;   <a href="#backend.api.reports">backend.api.reports</a>
  &#8226;   <a href="#backend.api.settings">backend.api.settings</a>
@@ -43267,6 +43445,7 @@ imported by:
  &#8226;   <a href="#backend.db.database">backend.db.database</a>
  &#8226;   <a href="#backend.db.models">backend.db.models</a>
  &#8226;   <a href="#backend.db.repository">backend.db.repository</a>
+ &#8226;   <a href="#backend.services.dispatcher">backend.services.dispatcher</a>
  &#8226;   <a href="#backend.services.llm.factory">backend.services.llm.factory</a>
  &#8226;   <a href="#backend.services.pipeline">backend.services.pipeline</a>
  &#8226;   <a href="#backend.services.report">backend.services.report</a>
@@ -48688,7 +48867,8 @@ imports:
   </div>
   <div class="import">
 imported by:
-    <a href="#email._encoded_words">email._encoded_words</a>
+    <a href="#backend.services.organizer">backend.services.organizer</a>
+ &#8226;   <a href="#email._encoded_words">email._encoded_words</a>
  &#8226;   <a href="#email._header_value_parser">email._header_value_parser</a>
  &#8226;   <a href="#email.quoprimime">email.quoprimime</a>
  &#8226;   <a href="#http.cookies">http.cookies</a>
@@ -50106,6 +50286,7 @@ imported by:
  &#8226;   <a href="#anyio.to_thread">anyio.to_thread</a>
  &#8226;   <a href="#asyncio.timeouts">asyncio.timeouts</a>
  &#8226;   <a href="#backend.db.repository">backend.db.repository</a>
+ &#8226;   <a href="#backend.schemas.overview">backend.schemas.overview</a>
  &#8226;   <a href="#backend.services.llm.json_guard">backend.services.llm.json_guard</a>
  &#8226;   <a href="#click._compat">click._compat</a>
  &#8226;   <a href="#click._termui_impl">click._termui_impl</a>
@@ -51123,7 +51304,8 @@ imports:
   </div>
   <div class="import">
 imported by:
-    <a href="#backend.services.settings_service">backend.services.settings_service</a>
+    <a href="#backend.services.dispatcher">backend.services.dispatcher</a>
+ &#8226;   <a href="#backend.services.settings_service">backend.services.settings_service</a>
  &#8226;   <a href="#click.types">click.types</a>
  &#8226;   <a href="#fastapi.encoders">fastapi.encoders</a>
  &#8226;   <a href="#pefile">pefile</a>
