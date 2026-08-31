@@ -162,6 +162,24 @@ def reset_failed_tasks(session: Session, batch_id: str) -> int:
     return result.rowcount or 0
 
 
+def fail_unfinished_tasks(session: Session, batch_id: str, error: str) -> int:
+    """批次级致命错误：将本批次所有未完成任务统一置为 failed。
+
+    API Key 无效/未配置属于全局错误，继续逐条请求只会重复得到相同失败；
+    统一失败后，用户修复模型配置即可通过「重新评分失败任务」恢复处理。
+    """
+    result = session.execute(
+        update(BatchTask)
+        .where(
+            BatchTask.batch_id == batch_id,
+            BatchTask.status.in_(["pending", "processing", "retrying"]),
+        )
+        .values(status="failed", error=error, updated_at=datetime.now())
+    )
+    session.commit()
+    return result.rowcount or 0
+
+
 def delete_batch(session: Session, batch_id: str) -> int:
     """删除批次及其任务；关联质检报告（conversation_id=batch_id）连同明细一并删除（无级联，先删明细防孤儿行）。"""
     from sqlalchemy import delete

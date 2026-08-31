@@ -367,13 +367,14 @@ Excel 房间对话导出（含「完整聊天记录」列）自动按房间识�
     const app = document.getElementById("app");
     const st = data.stats || {};
     const finished = data.status === "done";
+    const allSucceeded = finished && !(st.failed || 0);
     const failedCount = st.failed || 0;
     app.innerHTML = `
       <div class="card">
         <div class="card-title" style="display:flex;align-items:center;gap:10px">
           <span>${UI.esc(data.title || data.batch_id.slice(0, 8))}</span>
           <span>${statusBadge(data.status)}</span>
-          ${finished ? '<span class="badge badge-good">全部完成</span>' : ""}
+          ${finished ? `<span class="badge ${allSucceeded ? "badge-good" : "badge-warning"}">${allSucceeded ? "全部完成" : "处理结束"}</span>` : ""}
         </div>
         <div class="mt-16">${statGrid([
           { label: "总任务", value: st.total ?? 0 },
@@ -418,7 +419,7 @@ Excel 房间对话导出（含「完整聊天记录」列）自动按房间识�
           renderProgress(data);
           if (data.status === "done" && (data.stats || {}).pending === 0) {
             clearPoll();
-            UI.toast("批量评分全部完成", "success");
+            UI.toast((data.stats || {}).failed ? "批量评分已结束，存在失败任务" : "批量评分全部完成", (data.stats || {}).failed ? "info" : "success");
           }
         })
         .catch((err) => {

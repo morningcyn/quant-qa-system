@@ -25,6 +25,9 @@ logger = logging.getLogger(__name__)
 
 # 致命错误：重试也不会成功 → 直接 failed（等用户修复后手动重跑）
 FATAL_CODES = {"auth", "not_configured", "parse_failed", "unmapped_assistant"}
+# 模型鉴权/配置错误对整个批次都成立；解析或员工归属问题只影响当前任务，
+# 仍应允许批次继续处理其他客户。
+GLOBAL_FATAL_CODES = {"auth", "not_configured"}
 # 可重试错误退避（秒）：第 1 次失败等 5s，第 2 次 15s，第 3 次 30s 后 failed
 RETRY_DELAYS = [5, 15, 30]
 MAX_ATTEMPTS = 3
@@ -100,6 +103,10 @@ class BatchTaskManager:
                     code, message = exc.code, exc.message
                     if code in FATAL_CODES:
                         brepo.set_task_status(session, task, "failed", error=message, retry_count=task.retry_count)
+                        if code in GLOBAL_FATAL_CODES:
+                            # 401/未配置不会因更换客户而恢复，立即结束剩余任务，
+                            # 避免一个批次重复消耗大量无效请求。
+                            brepo.fail_unfinished_tasks(session, batch_id, message)
                         return
                     task.retry_count += 1
                     if task.retry_count >= MAX_ATTEMPTS:

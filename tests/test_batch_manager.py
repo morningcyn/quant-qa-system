@@ -347,6 +347,33 @@ class TestBatchTaskManager:
         assert retry == 0
         assert "API Key" in (error or "")
 
+    def test_auth_failure_stops_unfinished_batch(self, env, monkeypatch):
+        """批次级鉴权失败：当前任务及其余未完成任务一次性 failed，不重复请求。"""
+        factory = env
+        raw = (
+            "客户甲\n2026-08-01 10:00:00\n你好\n\n"
+            "韩珂龙头班\n2026-08-01 10:01:00\n您好\n\n"
+            "客户乙\n2026-08-02 10:00:00\n在吗\n\n"
+            "韩珂龙头班\n2026-08-02 10:01:00\n在的\n\n"
+            "客户丙\n2026-08-03 10:00:00\n帮我看看\n\n"
+            "韩珂龙头班\n2026-08-03 10:01:00\n好的\n"
+        )
+        batch_id, _ = make_batch(factory, raw, employees=[("段勇亮", "E003")], name_map={"韩珂龙头班": "段勇亮"})
+        client = MockLLMClient([LLMError("auth", "API Key 无效")])
+        mock_runtime(monkeypatch, client)
+        with factory() as s:
+            task = brepo.list_tasks(s, batch_id)[0]
+        import asyncio
+
+        asyncio.run(mgr._run_task(task))
+        with factory() as s:
+            stats = brepo.task_stats(s, batch_id)
+            tasks = brepo.list_tasks(s, batch_id)
+        assert len(client.calls) == 1
+        assert stats["failed"] == 3
+        assert stats["pending"] == stats["processing"] == stats["retrying"] == 0
+        assert all(t.status == "failed" and "API Key" in (t.error or "") for t in tasks)
+
     def test_unmapped_assistant_failed_with_guide(self, env, monkeypatch):
         """未匹配员工 → failed 并提示去员工档案创建（全自动匹配语义）。"""
         factory = env
