@@ -127,6 +127,16 @@ def set_inspection_conversation(session: Session, inspection_id: int, conversati
     session.commit()
 
 
+def list_inspections_by_conversation(session: Session, conversation_id: str) -> list[Inspection]:
+    """同客户服务会话的全部质检报告（批量评分/多人质检共用的 conversation_id 锚点）。
+
+    报告页用它渲染「同会话多位助理」切换入口；批量评分一个客户会话多位助理各自成报告，
+    多人质检同会话也多份报告，两份入口共用此查询。
+    """
+    stmt = select(Inspection).where(Inspection.conversation_id == conversation_id).order_by(Inspection.id)
+    return list(session.scalars(stmt))
+
+
 # ---------- service_overviews（多人质检总览） ----------
 
 def save_overview(

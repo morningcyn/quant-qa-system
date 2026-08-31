@@ -91,6 +91,112 @@ class TestMessageStructuring:
         assert _looks_like_sender_line("好的老师", EMPLOYEES) is False
         assert _looks_like_sender_line("王萌", EMPLOYEES) is True
 
+    def test_teacher_colon_line_is_customer(self):
+        """行首「老师：…」是客户对助理的称呼（客户发言），不得建助理轮。
+
+        _ROLE_MAP 为兼容单助理解析保留 老师→助，多人解析 ② 分支须把
+        「老师：尾盘66元出清…」归客（真实数据：客户向老师报告卖出）。"""
+        raw = "老师：尾盘66元出清国瓷材料，赚了138万。谢谢老师！"
+        r = parse_multi(raw)
+        assert [m.role for m in r.messages] == ["客"]
+        assert r.messages[0].speaker == "老师"
+        assert r.messages[0].text == "尾盘66元出清国瓷材料，赚了138万。谢谢老师！"
+
+    def test_teacher_colon_after_customer_block(self):
+        """「老师：」行在客户轮之后 → 客轮续上客户会话，不新建助理簇。"""
+        raw = (
+            "哈尔滨赢家1122：老师，中交涨停还能拿吗\n"
+            "老师：尾盘66元出清国瓷材料，赚了138万。谢谢老师！"
+        )
+        r = parse_multi(raw)
+        assert [m.role for m in r.messages] == ["客", "客"]
+        assert r.clusters == []  # 无助理轮 → 无簇
+
+    def test_teacher_numbered_marker_kept_as_assistant(self):
+        """带编号的「老师A：」保留原行为（手动整理标签，语义不明时宁归助留给人工归属）。"""
+        raw = "【客户】你好\n【老师A】好的，收到"
+        r = parse_multi(raw)
+        assert [m.role for m in r.messages] == ["客", "助"]
+
+    def test_not_assistant_list_infer_role(self):
+        """非助理名单命中 → 客；不传名单时 2 字中文名规则仍判助（名单是唯一逃生舱）。"""
+        from backend.services.multiparser import _infer_role, _looks_like_sender_line
+
+        assert _infer_role("思思", EMPLOYEES) == "助"  # 2 字中文人名规则
+        assert _infer_role("思思", EMPLOYEES, ["思思"]) == "客"
+        assert _infer_role("张永军", EMPLOYEES, ["思思", "张永军"]) == "客"
+        assert _infer_role("李金潓", EMPLOYEES, ["思思", "张永军"]) == "助"  # 真助理不受影响
+        # 名单中的名字不是三行式发送人行（否则会建发送人轮）
+        assert _looks_like_sender_line("思思", EMPLOYEES) is True
+        assert _looks_like_sender_line("思思", EMPLOYEES, ["思思"]) is False
+
+    def test_not_assistant_colon_line_is_customer(self):
+        """⑤ 未知说话人行「思思：荀老师…」→ 名单命中归客。"""
+        raw = "思思：荀老师，中交涨停是否继续持股不动？\n王萌：继续持股"
+        r = parse_multi(raw, EMPLOYEES, not_assistant=["思思", "张永军", "老师"])
+        assert [m.role for m in r.messages] == ["客", "助"]
+        assert r.messages[0].speaker == "思思"
+        assert r.messages[0].canonical_name == "客户"
+
+    def test_not_assistant_glued_sender_splits_as_customer(self):
+        """粘连的下一发送人是名单名（思思）：仍拆出（CSV 字段边界真实），但归客轮。"""
+        from backend.services.multiparser import _split_glued_sender
+
+        line = '客户内容","思思'
+        head, glued = _split_glued_sender(line, EMPLOYEES, ["思思", "张永军", "老师"])
+        assert head == "客户内容"
+        assert glued == "思思"
+        # 完整解析：拆出后下一行内容建思思客轮（粘连行不放首行——含逗号+内容词会被 CSV 嗅探误判）
+        raw = (
+            "韩老师好！\n"
+            '好的谢谢","思思\n'
+            "荀老师，中交涨停是否继续持股不动？"
+        )
+        r = parse_multi(raw, EMPLOYEES, not_assistant=["思思", "张永军", "老师"])
+        assert [m.role for m in r.messages] == ["客"]
+        assert r.messages[0].speaker == "思思"
+        assert r.messages[0].text == "荀老师，中交涨停是否继续持股不动？"
+
+    def test_not_assistant_bracket_line_is_customer(self):
+        """⑤b 方括号裸名【思思】→ 名单命中归客（_infer_bracket_role）。"""
+        raw = "【思思】荀老师，中交涨停是否继续持股不动？\n【王萌】继续持股"
+        r = parse_multi(raw, EMPLOYEES, not_assistant=["思思", "张永军", "老师"])
+        assert [m.role for m in r.messages] == ["客", "助"]
+
+    def test_not_assistant_csv_sender(self):
+        """CSV 发送人列命中名单 → 客。"""
+        raw = "发送人,内容\n思思,荀老师，中交涨停是否继续持股不动？\n王萌,继续持股"
+        r = parse_multi(raw, EMPLOYEES, not_assistant=["思思", "张永军", "老师"])
+        assert [m.role for m in r.messages] == ["客", "助"]
+
+    def test_not_assistant_list_does_not_affect_without_list(self):
+        """不传名单的调用（测试/旧代码）行为完全不变：思思仍按 2 字规则判助。"""
+        raw = "思思：荀老师，中交涨停是否继续持股不动？\n王萌：继续持股"
+        r = parse_multi(raw, EMPLOYEES)
+        assert [m.role for m in r.messages] == ["助", "助"]
+
+    def test_employee_no_substring_needs_boundary(self):
+        """工号包含匹配需数字边界：股票代码"000759"含工号"007"不得误命中员工（赵云露）。"""
+        from backend.services.multiparser import _infer_role, _match_employee
+
+        db = EMPLOYEES + [Emp(7, "赵云露", "007")]
+        assert _match_employee("000759拿着还是先卖了老师", db) is None  # 007 在数字串中间 → 不命中
+        assert _match_employee("客服007", db) is not None  # 编号客服（007 前后非数字）→ 命中
+        assert _infer_role("000759拿着还是先卖了老师", db) == "客"  # 客户提问（内容行）不得归助
+        assert _infer_role("赵云露", db) == "助"
+
+    def test_teacher_hello_is_customer(self):
+        """「老师好：…」是客户问候，不得剥前缀成「好」1 字助轮（_canonicalize rest ≥2 字）。"""
+        from backend.services.multiparser import _canonicalize, _infer_role
+
+        assert _canonicalize("老师好") == "老师好"  # 1 字残余不剥
+        assert _infer_role("老师好", EMPLOYEES) == "客"
+        assert _infer_role("老师王萌", EMPLOYEES) == "助"  # 2 字真名照常剥
+        raw = "老师好：空了帮我看看300672，目前持仓，谢谢🙏\n王萌：好的，稍等"
+        r = parse_multi(raw, EMPLOYEES)
+        assert [m.role for m in r.messages] == ["客", "助"]
+        assert r.messages[0].speaker == "老师好"
+
     def test_empty_raises(self):
         with pytest.raises(ParseError):
             parse_multi("   ")
@@ -454,3 +560,148 @@ class TestThreeLineSenderTsContent:
         assert m[0].text == "好的老师"
         assert m[1].role == "助" and m[1].speaker == "韩珂龙头班"
         assert m[1].text == "谢谢支持"
+
+
+
+class TestCsvGlueResidue:
+    """8.28 批次真实问题：CSV/JSON 引号残留（","粘连）导致发送人行被吞进上一条内容。"""
+
+    def test_glued_sender_split_into_own_message(self):
+        """内容行尾粘连「","下一发送人」→ 拆出建独立消息轮。"""
+        raw = (
+            "天津赢家0318\n2026-08-19 09:05:08\n"
+            "我前期想介入，想问问老师这个票能不能成龙\",\"韩珂龙头班（段勇亮）\n"
+            "周二放量短板，分歧比较大，控制风险为主"
+        )
+        r = parse_multi(raw, EMPLOYEES)
+        m = r.messages
+        assert len(m) == 2
+        assert m[0].role == "客" and m[0].speaker == "天津赢家0318"
+        assert '\",\"' not in m[0].text and "段勇亮" not in m[0].text
+        assert m[1].role == "助" and m[1].speaker == "韩珂龙头班（段勇亮）"
+        assert m[1].text == "周二放量短板，分歧比较大，控制风险为主"
+
+    def test_glued_double_comma_variant(self):
+        """变体 ",,"：粘连发送人拆出后其内容在下一行。"""
+        raw = (
+            "韩珂龙头班（柳颖）\n2026-08-18 18:48:40\n"
+            "做好风控\",,\"小小山人\n谢谢老师，今天盈新发展吃到肉了\n"
+            "小小山人\n2026-08-18 18:49:50\n还有景兴纸业和晶科还在，这二个现在要不要操作？谢谢了"
+        )
+        r = parse_multi(raw, EMPLOYEES)
+        m = r.messages
+        assert len(m) == 3
+        assert m[1].role == "客" and m[1].speaker == "小小山人"
+        assert m[1].text == "谢谢老师，今天盈新发展吃到肉了"
+        assert m[2].role == "客" and m[2].speaker == "小小山人"
+
+    def test_glued_tail_quote_stripped(self):
+        """内容行尾残留（...",,"）剥除，不残留垃圾。"""
+        raw = (
+            "哈尔滨赢家6336\n2026-08-17 20:17:43\n"
+            "好的谢谢老师\",\"山人俱乐部（张园）\n"
+            "拉升起来不追着去接了，等新的机会吧\",,\""
+        )
+        r = parse_multi(raw, EMPLOYEES)
+        assert len(r.messages) == 2
+        assert r.messages[0].text == "好的谢谢老师"
+        assert r.messages[1].speaker == "山人俱乐部（张园）"
+        assert r.messages[1].text == "拉升起来不追着去接了，等新的机会吧"
+
+    def test_sender_line_leading_quote(self):
+        """发送人行带行首引号（CSV 残留）→ 剥引号后识别。"""
+        raw = (
+            "目前没有符合模式的买入或加仓信号的。\"\"\n"
+            "\"青妹为健康更名\n2026-08-13 13:14:04\n好！老师放心！个股没重仓"
+        )
+        r = parse_multi(raw, EMPLOYEES)
+        m = r.messages
+        assert m[-1].role == "客" and m[-1].speaker == "青妹为健康更名"
+        assert m[-1].text == "好！老师放心！个股没重仓"
+
+
+class TestSystemMessagesSkipped:
+    """系统标签消息（（风险提示/AI 报告标签）不是真人发言 → 整行丢弃。"""
+
+    def test_risk_disclaimer_skipped(self):
+        raw = (
+            "（风险提示：单一业绩不代表全面业绩，过往业绩不代表将来收益，无法保证投资不受损失\n"
+            "山人俱乐部（李金潓）\n2026-08-18 18:56:42\n景兴纸业：目前是长线教学的，有耐心可以考虑按照模式先暂时持有"
+        )
+        r = parse_multi(raw, EMPLOYEES)
+        assert len(r.messages) == 1
+        assert r.messages[0].speaker == "山人俱乐部（李金潓）"
+        assert "风险" not in r.messages[0].text
+
+    def test_zero_width_report_label_skipped(self):
+        raw = (
+            "‌营收预期‌：机构预测2026年全年营业收入区间为584.60~761.80亿元\n"
+            "天津赢家0318\n2026-08-19 09:05:08\n老师好"
+        )
+        r = parse_multi(raw, EMPLOYEES)
+        assert len(r.messages) == 1
+        assert r.messages[0].speaker == "天津赢家0318"
+
+
+class TestReportTitleNotSender:
+    """研报标题行（股票名+题材+拐点）不得被三行式误判为发送人。"""
+
+    def test_stock_title_with_space_not_sender(self):
+        """研报标题（股票名+题材+拐点）不建发送人轮，后续真实助理消息轮正常。"""
+        raw = (
+            "2026-08-12 22:37:45\n春秋电子 消费电子+数据中心+60分钟拐点\n"
+            "昨天沙场点兵教学的案例，今天受机器人板块影响，目前分时已经破位了，手里有仓位的话及时关注模式离场的机会\n"
+            "韩珂龙头班（段勇亮）\n2026-08-12 22:38:10\n低吸的话注意分时破位及时离场，控制好仓位"
+        )
+        r = parse_multi(raw, EMPLOYEES)
+        assert len(r.messages) == 1
+        assert r.messages[0].speaker == "韩珂龙头班（段勇亮）"
+        assert "春秋电子" not in r.messages[0].text
+
+    def test_stock_code_6_digits_not_sender(self):
+        """「中文+6位数字」是股票代码（中国卫星600118），客户昵称尾缀 2-4 位。"""
+        from backend.services.multiparser import _looks_like_sender_line
+
+        assert _looks_like_sender_line("中国卫星600118", EMPLOYEES) is False
+        assert _looks_like_sender_line("哈尔滨赢家1122", EMPLOYEES) is True
+
+
+class TestChineseNicknameNotAssistant:
+    """4 字以上普通纯中文昵称（小小山人/春秋电子/青妹为健康更名）归客户，不误入助理组；
+    助理教学群名（…班/…俱乐部）仍是助理。"""
+
+    def test_four_char_chinese_nickname_customer(self):
+        from backend.services.multiparser import _infer_role
+
+        assert _infer_role("小小山人", EMPLOYEES) == "客"
+        assert _infer_role("春秋电子", EMPLOYEES) == "客"
+        assert _infer_role("青妹为健康更名", EMPLOYEES) == "客"
+        assert _infer_role("独酌仙境", EMPLOYEES) == "客"
+        assert _infer_role("真心的人", EMPLOYEES) == "客"
+        assert _infer_role("好人买好股", EMPLOYEES) == "客"
+        # 2-3 字中文人名/班级名（姓名）剥出后仍为助（未建档助理等待建员工档案）
+        assert _infer_role("柳颖", EMPLOYEES) == "助"
+        assert _infer_role("李金潓", EMPLOYEES) == "助"
+        assert _infer_role("韩珂龙头班（柳颖）", EMPLOYEES) == "助"
+        # 助理教学群名（5 字以上）仍是助
+        assert _infer_role("韩珂龙头班", EMPLOYEES) == "助"
+        assert _infer_role("山人俱乐部", EMPLOYEES) == "助"
+
+
+
+class TestReportBlockBracketSkipped:
+    """方括号研报块头（【中国卫星600118】+研报内容+风险提示）是投顾系统推送，非真人发言 → 跳过不建轮。"""
+
+    def test_stock_code_bracket_report_skipped(self):
+        raw = (
+            "【中国卫星600118】商业航天+卫星，符合强势调整模式，\n"
+            "这个案例目前符合模式买点，可在涨幅3%内自行把握模式低吸机会\n"
+            "（单一业绩不代表全面业绩，过往业绩不代表将来收益，无法保证投资不受损失\",\"秦皇岛赢家8599\n"
+            "2026-08-20 10:12:30\n老师好，中国卫星今天早上还可以买吗"
+        )
+        r = parse_multi(raw, EMPLOYEES)
+        m = r.messages
+        assert len(m) == 1
+        assert m[0].role == "客" and m[0].speaker == "秦皇岛赢家8599"
+        # 研报内容/风险提示/股票代码块头均不残留，只保留客户真实提问
+        assert m[0].text == "老师好，中国卫星今天早上还可以买吗"

@@ -120,3 +120,50 @@ class Setting(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=datetime.now, onupdate=datetime.now
     )
+
+
+class BatchRun(Base):
+    """批量评分批次：一次导入 = 一个批次（多客户会话 → 多条 BatchTask）。"""
+
+    __tablename__ = "batch_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    batch_id: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    title: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    # pending / running / done
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
+    # 导入统计 {customer_count, assistant_count, task_count, message_count, chunk_count}
+    source_stats_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    warnings_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=datetime.now, onupdate=datetime.now
+    )
+
+
+class BatchTask(Base):
+    """批量评分任务：一个客户会话 = 一个 task。input_data 存结构化消息（断点续跑事实源）。"""
+
+    __tablename__ = "batch_tasks"
+    __table_args__ = (
+        Index("idx_batch_tasks_batch_status", "batch_id", "status"),
+        Index("idx_batch_tasks_batch_task", "batch_id", "task_id", unique=True),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    batch_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    task_id: Mapped[str] = mapped_column(String(16), nullable=False)  # 批内 task_001…
+    customer_id: Mapped[str] = mapped_column(String(64), nullable=False, default="c0000")  # 溯源
+    customer_name: Mapped[str] = mapped_column(String(200), nullable=False, default="客户")
+    assistant_ids_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    # JSON：{messages: [...], title, source_fmt}
+    input_data: Mapped[str] = mapped_column(Text, nullable=False)
+    # pending / processing / retrying / completed / failed
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
+    result_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=datetime.now, onupdate=datetime.now
+    )

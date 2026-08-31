@@ -128,6 +128,23 @@
     return null;
   }
 
+  // 同会话多位助理（批量评分多助理任务 / 多人质检）：报告页顶部助理切换栏，点谁看谁的完整报告
+  function sessionTabBar(r) {
+    const reps = r.session_reports || [];
+    if (reps.length < 2) return "";
+    const current = r.id;
+    return `
+      <div class="card mb-16">
+        <div class="card-title">本次会话参与助理（${reps.length} 位 · 点击切换查看各自报告）</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          ${reps.map((s) => `
+            <a class="btn btn-sm ${s.id === current ? "btn-primary" : "btn-ghost"}" href="#/report/${s.id}">
+              ${UI.esc(s.assistant_name)} ${s.total_score} 分 ${s.is_red_alert ? "🚫" : s.is_yellow_alert ? "⚠️" : ""}
+            </a>`).join("")}
+        </div>
+      </div>`;
+  }
+
   function renderReportPage(app, r, back) {
     const tpl = r.template_snapshot || {};
     const dConf = tpl.d || {};
@@ -211,6 +228,8 @@
             <button class="btn btn-ghost" id="btn-pdf">导出 PDF</button>
           </div>
         </div>
+
+        ${sessionTabBar(r)}
 
         <div class="report-hero">
           <div class="hero-score ${heroScore} num">${r.total_score}<span style="font-size:20px;color:var(--text-3)"> / 100</span></div>

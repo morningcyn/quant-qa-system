@@ -58,10 +58,27 @@ def load_name_map() -> dict:
             return loaded if isinstance(loaded, dict) else {}
     except (OSError, ValueError):
         return {}
+
+
+def load_not_assistant_names() -> list:
+    """非助理名单（data/not_assistant.json）：客户昵称等被规则误判为助理的名字（思思/张永军等）。
+
+    与 name_map 同一模式：调用层（预览/整理/分发/批量）显式加载传入，保证各处口径一致。
+    命中即归客户轮（员工匹配/中文人名规则之前检查）——用户明确声明过不是助理的名字，
+    不得出现在「以下助理未匹配到员工档案」提示中。"""
+    try:
+        with open(os.path.join("data", "not_assistant.json"), encoding="utf-8") as f:
+            loaded = json.load(f)
+            return [str(x) for x in loaded] if isinstance(loaded, list) else []
+    except (OSError, ValueError):
+        return []
 # 自动角色推断用词（发送人含这些词素 → 助；刻意排除"老师"：客户也可能是"王老师"）
 _AUTO_ASSISTANT_WORDS = (
     "客服", "助理", "投顾", "顾问", "座席", "理财师", "人工", "热线", "agent", "assistant",
 )
+# 群组名后缀（…班/…俱乐部）：助理教学群名（韩珂龙头班/山人俱乐部），5 字以上纯中文，
+# 与客户昵称（小小山人/春秋电子/好人买好股）区分，不得归客户轮
+_GROUP_NAME_RE = re.compile(r"(班|俱乐部)$")
 # 称谓后缀（匹配/归并用；发送人含这些后缀 → 客："李姐/张哥/王经理/王老师/张先生/李女士"）
 _HONORIFIC_RE = re.compile(r"(老师|先生|女士|小姐|姐|哥|经理|顾问)$")
 # 尾部标识符（客服A / 投顾2 / 助理3 → A / 2 / 3，用于同人异名归并）
@@ -75,12 +92,51 @@ _SHORT_ACK_RE = re.compile(
     r"^(好的?|嗯{1,4}|可以(的|了)?|收到(了)?|谢谢(了)?|再见|拜拜|好|行|对|是|哦|知道了?|了解|明白|没问题|OK|ok|Ok|yes|Yes|no|No)$"
 )
 _ALNUM_ONLY_RE = re.compile(r"^[0-9A-Za-z]+$")
+# CSV/JSON 引号残留：内容行中 "," 或 ",,"（引号+逗号+引号）——导出文本粘贴后
+# 「内容","下一发送人」粘连形态，需把下一发送人从内容行尾拆出
+_GLUE_RE = re.compile(r'"+[,\s]*"+')
+# 零宽字符（U+200B..U+200F 等）：AI 报告导出的标签行（"‌营收预期‌：…"）非真人发言
+_ZERO_WIDTH_RE = re.compile(r"[​-‏⁠﻿]")
 
 
 def _is_short_acknowledgment(s: str) -> bool:
     """短回应判定：短回应词表，或 ≤6 位纯字母数字（"666"/"okay"）。"""
     t = s.strip()
     return bool(_SHORT_ACK_RE.fullmatch(t)) or (len(t) <= 6 and bool(_ALNUM_ONLY_RE.fullmatch(t)))
+
+
+def _looks_like_glued_sender(tail: str, assistant_db, not_assistant=None) -> bool:
+    """粘连发送人判定：""",""" 后片段是否像发送人（班级名（姓名）/客户昵称/纯中文名）。
+
+    比 _looks_like_sender_line 放宽到 ≤8 字纯中文（小小山人/青妹为健康更名等客户昵称）——
+    """,""" 本身是 CSV 引号残留（正常聊天内容几乎不会出现），字段边界 + 名字特征已足够。
+    注意：此处**不**检查非助理名单——名单名字（思思/张永军）仍应拆出（CSV 字段边界真实），
+    归客与否由调用方 _infer_role(glued, …, not_assistant) 决定。"""
+    t = tail.strip('"').strip()
+    if not t or len(t) > 24:
+        return False
+    if _looks_like_sender_line(t, assistant_db, not_assistant):
+        return True
+    return bool(_SENDER_LINE_RE.match(t) and _is_chinese_name(t))
+
+
+def _split_glued_sender(line: str, assistant_db, not_assistant=None) -> tuple[str, str | None]:
+    """剥离内容行尾的 CSV 引号残留（""",""" 粘连的下一发送人、行尾孤立引号）。
+
+    导出文本（CSV/JSON 引号包裹）粘贴后形如「内容","下一发送人」或「内容",,"」：
+    返回 (清洗后内容, 粘连发送人|None)；粘连发送人由调用方建 pending，下一内容行即其消息。
+    """
+    m = _GLUE_RE.search(line)
+    if not m:
+        return line.rstrip('"'), None  # 行尾孤立引号（。""）剥掉
+    head = line[:m.start()].rstrip('"').rstrip()
+    tail = line[m.end():]
+    if tail and _looks_like_glued_sender(tail, assistant_db, not_assistant):
+        return head, tail.strip('"').strip()
+    if not tail:
+        return head, None  # 行尾残留（...",,"）→ 只取粘连前内容
+    return line.rstrip('"'), None
+
 
 # CSV/JSON 列名
 _TIME_HEADERS = {"时间", "日期", "time", "date", "timestamp", "datetime"}
@@ -135,25 +191,26 @@ class MultiParseResult:
     raw_text: str = ""
 
 
-def parse_multi(raw_text: str, assistant_db=None, name_map=None) -> MultiParseResult:
+def parse_multi(raw_text: str, assistant_db=None, name_map=None, not_assistant=None) -> MultiParseResult:
     """解析完整聊天记录 → 结构化消息 + 助理识别/归并 + 员工匹配 + 服务分段。
 
     assistant_db：员工列表（鸭子类型，元素含 .id/.name/.employee_no 即可），
     缺省时不做员工匹配（assistant_id 全为 None，由前端人工指定）。
     name_map：显示名称→真实姓名映射表（{"韩珂龙头班": "段勇亮"}），链接式头像行
     缺失时兜底识别真实姓名。
+    not_assistant：非助理名单（load_not_assistant_names 加载），命中即归客户轮。
     """
     text = (raw_text or "").strip()
     if not text:
         raise ParseError("内容为空，请粘贴或上传会话记录")
     if text.lstrip().startswith("[") and _looks_like_json(text):
-        messages = _parse_json_messages(text, assistant_db)
+        messages = _parse_json_messages(text, assistant_db, not_assistant)
         fmt = "json"
     elif _looks_like_csv(text):
-        messages = _parse_csv_messages(text, assistant_db)
+        messages = _parse_csv_messages(text, assistant_db, not_assistant)
         fmt = "csv"
     else:
-        messages = _parse_text_messages(text, assistant_db, name_map)
+        messages = _parse_text_messages(text, assistant_db, name_map, not_assistant)
         fmt = "text"
     if not messages:
         raise ParseError(
@@ -195,10 +252,11 @@ def _looks_like_csv(text: str) -> bool:
 
 # ---------- 文本逐行解析 ----------
 
-def _parse_text_messages(text: str, assistant_db, name_map=None) -> list[MultiMessage]:
+def _parse_text_messages(text: str, assistant_db, name_map=None, not_assistant=None) -> list[MultiMessage]:
     """marker 文本 / 块头导出文本 / 微信双行格式逐行解析，时间戳原样保留。
 
     name_map：显示名称→真实姓名映射（{"韩珂龙头班": "段勇亮"}），链接式头像行缺失时兜底。
+    not_assistant：非助理名单（load_not_assistant_names 加载），命中即归客户轮。
     """
     messages: list[MultiMessage] = []
     lines = text.splitlines()
@@ -250,7 +308,12 @@ def _parse_text_messages(text: str, assistant_db, name_map=None) -> list[MultiMe
                 # 空标签轮先落库（内容留空，归属不丢），该行继续按新消息正常解析
                 _flush_pending("", raw_line)
             else:
-                _flush_pending(line, raw_line)
+                # 内容行剥离 CSV 引号残留：粘连的下一发送人继续建 pending（连环粘）
+                content, glued = _split_glued_sender(line, assistant_db, not_assistant)
+                _flush_pending(content, raw_line)
+                if glued:
+                    pending_name = (_infer_role(glued, assistant_db, not_assistant), glued)
+                    pending_empty_label = False
                 continue
         # ① 块头声明行：客户|助理 + 昵称/姓名（冒号可选、行尾可粘连时间戳）。
         #    判定必须 下一行是时间戳 或 本行尾部带时间戳——否则"客户 你好"这类 marker 会被误吞
@@ -287,6 +350,11 @@ def _parse_text_messages(text: str, assistant_db, name_map=None) -> list[MultiMe
         marker = match_marker(rest)
         if marker and marker.get("sep") and normalize_role(marker["role"]):
             role = normalize_role(marker["role"])
+            # 「老师：…」是客户对助理的称呼（客户发言）：_ROLE_MAP 为兼容单助理解析保留 老师→助，
+            # 多人解析中行首「老师：」不得建助理轮（真实数据：老师：尾盘66元出清… 是客户报告）。
+            # 带编号的「老师A：」保留原行为（手动整理标签，语义不明时宁归助留给人工归属）。
+            if marker["role"] == "老师" and not marker.get("suffix"):
+                role = "客"
             suffix = marker.get("suffix") or ""
             spk = marker["role"].strip() + suffix
             messages.append(
@@ -307,8 +375,8 @@ def _parse_text_messages(text: str, assistant_db, name_map=None) -> list[MultiMe
                     messages[-1].timestamp = line
                 continue
             nxt = lines[i + 1].strip() if i + 1 < len(lines) else ""
-            if nxt and (i + 2 < len(lines)) and _looks_like_sender_line(nxt, assistant_db):
-                pending_name = (_infer_role(nxt, assistant_db), _strip_role_prefix(nxt))
+            if nxt and (i + 2 < len(lines)) and _looks_like_sender_line(nxt, assistant_db, not_assistant):
+                pending_name = (_infer_role(nxt, assistant_db, not_assistant), _strip_role_prefix(nxt))
                 _pending_ts = line
                 _skip_next = True
                 continue
@@ -319,37 +387,45 @@ def _parse_text_messages(text: str, assistant_db, name_map=None) -> list[MultiMe
         #    裸发送人行 + 下一行是整行时间戳 → 进入 pending（时间戳行挂 ts、内容行走 flush）。
         #    判据收紧：非短回应词、非称谓（"好的/王先生"等客户回复内容不可能是发送人行）。
         #    name_map 兜底显示名称→真实姓名（命中拼"显示名+真实姓名"，_match_employee 互含命中员工）。
-        if next_is_ts and _SENDER_LINE_RE.match(rest):
-            if not _is_short_acknowledgment(rest) and not _HONORIFIC_RE.search(rest):
-                name = rest.strip()
-                real = (name_map or {}).get(name)
-                if real:
-                    spk = f"{name}{real}"
-                    role = _infer_role(real, assistant_db)
-                else:
-                    spk = name
-                    role = _infer_role(name, assistant_db)
-                pending_name = (role, spk)
+        #    CSV 引号残留：发送人行可能带行首引号（"青妹为健康更名）→ 先剥引号再判定。
+        if next_is_ts:
+            sender_cand = rest.strip().strip('"')
+            if _SENDER_LINE_RE.match(sender_cand):
+                if not _is_short_acknowledgment(sender_cand) and not _HONORIFIC_RE.search(sender_cand):
+                    name = sender_cand
+                    real = (name_map or {}).get(name)
+                    if real:
+                        spk = f"{name}{real}"
+                        role = _infer_role(real, assistant_db, not_assistant)
+                    else:
+                        spk = name
+                        role = _infer_role(name, assistant_db, not_assistant)
+                    pending_name = (role, spk)
+                    continue
+        # ④ 微信双行 sender 行：行首时间戳 + 发送人（无角色词无冒号；CSV 残留引号先剥）
+        if m_ts:
+            sender_cand = rest.strip().strip('"')
+            if _NAME_LINE_RE.match(sender_cand):
+                name = sender_cand
+                # 短回应词（"2026-08-24 10:25:00 好的"）：不是新消息的发送人，时间戳挂上一轮、
+                # 短回应续入上一轮内容（无发送人两行式的固有歧义）
+                if _is_short_acknowledgment(name):
+                    if messages:
+                        messages[-1].timestamp = line_ts
+                        messages[-1].text = f"{messages[-1].text}\n{name}".strip()
+                    continue
+                role = _infer_role(name, assistant_db, not_assistant)
+                pending_name = (role, name)
+                _pending_ts = line_ts
                 continue
-        # ④ 微信双行 sender 行：行首时间戳 + 发送人（无角色词无冒号）
-        if m_ts and _NAME_LINE_RE.match(rest):
-            name = rest.strip()
-            # 短回应词（"2026-08-24 10:25:00 好的"）：不是新消息的发送人，时间戳挂上一轮、
-            # 短回应续入上一轮内容（无发送人两行式的固有歧义）
-            if _is_short_acknowledgment(name):
-                if messages:
-                    messages[-1].timestamp = line_ts
-                    messages[-1].text = f"{messages[-1].text}\n{name}".strip()
-                continue
-            role = _infer_role(name, assistant_db)
-            pending_name = (role, name)
-            _pending_ts = line_ts
-            continue
         # ⑤ 未知说话人行："名字：内容"（时间戳剥离后同样适用）
         unk = _UNKNOWN_LINE_RE.match(rest)
         if unk:
             name, txt = unk.group("name"), unk.group("text")
-            role = _infer_role(name, assistant_db)
+            # 系统标签消息（（风险提示）/零宽空格标签：AI 报告导出）不是真人发言 → 整行跳过
+            if name.startswith("（") or name.startswith("(") or _ZERO_WIDTH_RE.search(name):
+                continue
+            role = _infer_role(name, assistant_db, not_assistant)
             messages.append(
                 MultiMessage(
                     turn_no=len(messages) + 1, role=role, speaker=name,
@@ -364,7 +440,10 @@ def _parse_text_messages(text: str, assistant_db, name_map=None) -> list[MultiMe
         brk = _BRACKET_NAME_RE.match(rest)
         if brk:
             name, txt = brk.group("name").strip(), brk.group("text").strip()
-            role = _infer_bracket_role(name, assistant_db)
+            # 研报块头推送（【中国卫星600118】+研报内容）：股票代码形态（中文+6位数字）非真人发言 → 整行跳过
+            if re.fullmatch(r"[一-鿿]{1,8}[0-9]{6}", name):
+                continue
+            role = _infer_bracket_role(name, assistant_db, not_assistant)
             if txt:
                 messages.append(
                     MultiMessage(
@@ -379,12 +458,22 @@ def _parse_text_messages(text: str, assistant_db, name_map=None) -> list[MultiMe
                 if line_ts:
                     _pending_ts = line_ts
             continue
-        # ⑥ 内容行 → 续入上一轮
+        # ⑥ 内容行 → 续入上一轮（先剥离 CSV 引号残留：粘连的下一发送人拆出建 pending）
+        content, glued = _split_glued_sender(line, assistant_db, not_assistant)
+        if glued:
+            pending_name = (_infer_role(glued, assistant_db, not_assistant), glued)
+            pending_empty_label = False
+            if messages:
+                messages[-1].text = f"{messages[-1].text}\n{content}".strip()
+                messages[-1].raw_line = raw_line
+            else:
+                preamble.append(content)
+            continue
         if messages:
-            messages[-1].text = f"{messages[-1].text}\n{line}".strip()
+            messages[-1].text = f"{messages[-1].text}\n{content}".strip()
             messages[-1].raw_line = raw_line
         else:
-            preamble.append(line)
+            preamble.append(content)
     if pending_name:
         _flush_pending("", "")
     return messages
@@ -407,7 +496,7 @@ def _strip_tail_timestamp(s: str) -> tuple[str, str | None]:
 
 # ---------- CSV / JSON ----------
 
-def _parse_csv_messages(text: str, assistant_db) -> list[MultiMessage]:
+def _parse_csv_messages(text: str, assistant_db, not_assistant=None) -> list[MultiMessage]:
     sample = text[:4096]
     try:
         dialect = csv.Sniffer().sniff(sample, delimiters=",\t;")
@@ -443,7 +532,7 @@ def _parse_csv_messages(text: str, assistant_db) -> list[MultiMessage]:
         content = str(row[text_idx]).strip()
         if not content:
             continue
-        role = _resolve_speaker_role(speaker_raw, assistant_db)
+        role = _resolve_speaker_role(speaker_raw, assistant_db, not_assistant)
         if role is None:
             continue
         ts = None
@@ -459,7 +548,7 @@ def _parse_csv_messages(text: str, assistant_db) -> list[MultiMessage]:
     return messages
 
 
-def _parse_json_messages(text: str, assistant_db) -> list[MultiMessage]:
+def _parse_json_messages(text: str, assistant_db, not_assistant=None) -> list[MultiMessage]:
     try:
         data = json.loads(text)
     except json.JSONDecodeError as exc:
@@ -475,7 +564,7 @@ def _parse_json_messages(text: str, assistant_db) -> list[MultiMessage]:
         ts = item.get("time") or item.get("时间") or item.get("timestamp")
         if role_raw is None or text_raw is None:
             raise ParseError(f"JSON 第 {i + 1} 项缺少 role/content 字段")
-        role = _resolve_speaker_role(str(role_raw), assistant_db)
+        role = _resolve_speaker_role(str(role_raw), assistant_db, not_assistant)
         if role is None:
             continue
         content = str(text_raw).strip()
@@ -494,7 +583,7 @@ def _parse_json_messages(text: str, assistant_db) -> list[MultiMessage]:
 
 # ---------- 角色推断 / 规范化 ----------
 
-def _resolve_speaker_role(speaker_raw: str, assistant_db) -> str | None:
+def _resolve_speaker_role(speaker_raw: str, assistant_db, not_assistant=None) -> str | None:
     """发送人 → 客|助|None。优先级：规范角色词 → 前缀模式 → 员工匹配/助词素推断 → 方向语义。"""
     role = normalize_role(speaker_raw)
     if role:
@@ -503,16 +592,20 @@ def _resolve_speaker_role(speaker_raw: str, assistant_db) -> str | None:
         return "助"
     if _CUSTOMER_PREFIX_RE.match(speaker_raw):
         return "客"
-    return _infer_role(speaker_raw, assistant_db)
+    return _infer_role(speaker_raw, assistant_db, not_assistant)
 
 
-def _infer_role(speaker: str, assistant_db) -> str:
-    """无角色词的发送人：员工表命中/含助词素/中文人名（含"班级名（姓名）"）→ 助；否则客。
+def _infer_role(speaker: str, assistant_db, not_assistant=None) -> str:
+    """无角色词的发送人：非助理名单命中/员工表命中/含助词素/中文人名 → 助；否则客。
 
+    非助理名单（思思/张永军等客户昵称）优先级最高——用户明确声明不是助理的名字，
+    即使 2 字中文人名规则命中也不得建助理轮（否则出现在"未匹配到员工档案"失败提示）。
     中文人名排除称谓词（王先生/张女士/李老师）——客户也可能是中文名。
     称谓检查必须作用于原始字符串：_canonicalize 会把"王老师"剥成"王"（2 字中文名），
     先剥后查会误判。宁可标为"未匹配助理"留给前端人工归属，也不要把助理吞成客户轮。
     """
+    if not_assistant and speaker in not_assistant:
+        return "客"
     if _match_employee(speaker, assistant_db):
         return "助"
     low = speaker.lower()
@@ -520,21 +613,33 @@ def _infer_role(speaker: str, assistant_db) -> str:
         return "助"
     if _HONORIFIC_RE.search(speaker) or _is_short_acknowledgment(speaker):
         return "客"
+    # 「老师好/老师早」等客户问候：「老师」开头且其余不是 ≥2 字中文名（老师王萌 是真名）→ 客。
+    # _canonicalize 剥前缀要求 rest ≥2 字，但「老师好」3 字仍会命中 3 字中文人名规则，此处先行拦截。
+    if speaker.startswith("老师"):
+        rest = speaker[len("老师"):].strip()
+        if not (_is_chinese_name(rest) and len(rest) >= 2):
+            return "客"
     cn = _canonicalize(speaker)
-    if _is_chinese_name(cn):
+    # 2-3 字纯中文人名 → 助（员工名/班级名（姓名）剥出的未建档助理）；
+    # 群组名（…班/…俱乐部，如韩珂龙头班/山人俱乐部）是助理教学群名 → 助；
+    # 其余 4 字以上纯中文（小小山人/春秋电子/青妹为健康更名）是客户昵称/公司名/股票名，不得误归助理组
+    if _is_chinese_name(cn) and (len(cn) <= 3 or _GROUP_NAME_RE.search(cn) is not None):
         return "助"
     return "客"
 
 
-def _looks_like_sender_line(nxt: str, assistant_db) -> bool:
+def _looks_like_sender_line(nxt: str, assistant_db, not_assistant=None) -> bool:
     """三行式导出（时间戳行 / 发送人行 / 内容行）中发送人行的判定。
 
     特征：员工名/含助词素/客户前缀（"客户哈尔滨赢家1122"）/数字或字母昵称/
     2-4 字中文名（含"班级名（姓名）"剥括号后）。不含称谓词（王先生/李老师）。
+    非助理名单（思思/张永军等客户昵称）不是发送人。
     刻意排除长中文句子（"我会持续关注"）——两行式"时间戳行+内容行"的内容
     不得被误判为发送人。
     """
     if not _SENDER_LINE_RE.match(nxt):
+        return False
+    if not_assistant and nxt in not_assistant:
         return False
     if _match_employee(nxt, assistant_db):
         return True
@@ -546,13 +651,18 @@ def _looks_like_sender_line(nxt: str, assistant_db) -> bool:
         return True
     if _CUSTOMER_PREFIX_RE.match(nxt):
         return True
+    # 含空格的非员工/非助词素行（"春秋电子 消费电子+数据中心+60分钟拐点"研报标题）不是发送人；
+    # 「中文+6位数字」是股票代码（中国卫星600118），客户昵称尾缀为 2-4 位（哈尔滨赢家1122）
+    if " " in nxt:
+        return False
     if re.search(r"[0-9a-zA-Z]", nxt):
-        return True
+        return not re.fullmatch(r"[一-鿿]{1,8}[0-9]{6}", nxt)
     # 称谓检查作用原始字符串（同 _infer_role 理由：先剥会把"好的老师"剥成"好的"）
     if _HONORIFIC_RE.search(nxt):
         return False
     cn = _canonicalize(nxt)
-    return _is_chinese_name(cn) and len(cn) <= 4
+    # 群组名（韩珂龙头班/山人俱乐部）5 字以上也是发送人行（助理群名）
+    return _is_chinese_name(cn) and (len(cn) <= 4 or _GROUP_NAME_RE.search(cn) is not None)
 
 
 def _looks_like_labeled_turn(rest: str) -> bool:
@@ -563,9 +673,11 @@ def _looks_like_labeled_turn(rest: str) -> bool:
     return bool(_BRACKET_NAME_RE.match(rest))
 
 
-def _infer_bracket_role(name: str, assistant_db) -> str:
+def _infer_bracket_role(name: str, assistant_db, not_assistant=None) -> str:
     """方括号裸名（[王萌] 内容）：员工/助词素/中文人名 → 助（助理候选，未匹配留待人工归属）；
-    数字昵称等（哈尔滨赢家1122）→ 客。"""
+    数字昵称等（哈尔滨赢家1122）→ 客；非助理名单命中 → 客。"""
+    if not_assistant and name in not_assistant:
+        return "客"
     if _match_employee(name, assistant_db):
         return "助"
     low = name.lower()
@@ -604,15 +716,17 @@ def _canonicalize(speaker: str) -> str:
     m = re.search(r"[（(]([^（）()]+)[）)]$", n)
     if m and _is_chinese_name(m.group(1)):
         n = m.group(1)
-    # 称谓后缀：马萌老师 / 老师马萌 → 马萌
+    # 称谓前缀/后缀：马萌老师 / 老师马萌 → 马萌
+    # rest 必须 ≥2 字：否则"老师好"（客户问候）会被剥成"好"（1 字中文 → 助规则误判）。
+    # 客户发言整行"老师好：…"剥前缀剩 1 字时宁可不剥（保留 3 字 → 称谓特征 → 客）。
     for prefix in ("老师", "客服", "投顾", "助理", "顾问", "理财师", "座席", "运营", "班主任", "管理员"):
-        if n.startswith(prefix) and len(n) > len(prefix):
+        if n.startswith(prefix) and len(n) > len(prefix) + 1:
             rest = n[len(prefix):].strip()
-            if _is_chinese_name(rest):
+            if _is_chinese_name(rest) and len(rest) >= 2:
                 return rest
-        if n.endswith(prefix) and len(n) > len(prefix):
+        if n.endswith(prefix) and len(n) > len(prefix) + 1:
             rest = n[:-len(prefix)].strip()
-            if _is_chinese_name(rest):
+            if _is_chinese_name(rest) and len(rest) >= 2:
                 return rest
     return n
 
@@ -641,7 +755,9 @@ def _match_employee(speaker: str, assistant_db) -> tuple[int, object] | None:
         # 互含/工号包含仅对 ≥2 字候选生效：单字"徐"是姓，命中可能是巧合，宁缺毋滥
         elif name and len(cand_clean) >= 2 and len(name) >= 2 and (name in cand_clean or cand_clean in name):
             score = 2
-        elif no and len(cand) >= 2 and no in cand:
+        # 工号包含需数字边界：否则股票代码/数字串会被 3 位工号子串包含
+        # （"000759" 含工号 "007" → 误把客户提问归为赵云露助理轮）
+        elif no and len(cand) >= 2 and re.search(rf"(?<![0-9]){re.escape(no)}(?![0-9])", cand):
             score = 1
         if score:
             hits.append((score, ast))

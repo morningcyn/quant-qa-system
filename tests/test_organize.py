@@ -45,17 +45,17 @@ class TestOrganizeText:
             "昆明赢家2735\n2026-08-25 21:22:22\n韩老师麻烦问下京东方a明天可以买吗？\n\n"
             "韩珂龙头班\n2026-08-25 22:51:19\n可以，中长线没问题\n\n"
             "昆明赢家2735\n2026-08-25 22:52:00\n好的谢谢老师\n\n"
-            "峰哥荐股\n2026-08-25 23:00:00\n我也补充一句，短线注意仓位"
+            "山人俱乐部（李金潓）\n2026-08-25 23:00:00\n我也补充一句，短线注意仓位"
         )
         out = organizer.organize_text(raw, DB_WITH_DYL, {"韩珂龙头班": "段勇亮"})
         lines = out["organized_text"].split("\n")
         assert lines[0].startswith("【客户】")
         assert lines[1].startswith("【助理A】")  # 韩珂龙头班段勇亮（name_map）先出现
         assert lines[2].startswith("【客户】")
-        assert lines[3].startswith("【助理B】")  # 峰哥荐股 后出现
+        assert lines[3].startswith("【助理B】")  # 山人俱乐部（李金潓）后出现
         assert out["assistants"] == [
             {"canonical_name": "段勇亮", "label": "助理A"},
-            {"canonical_name": "峰哥荐股", "label": "助理B"},
+            {"canonical_name": "李金潓", "label": "助理B"},
         ]
 
     def test_name_map_real_name_in_cluster(self):

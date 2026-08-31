@@ -8,7 +8,7 @@ from backend.services.parser import ParseError
 from backend.utils.errors import BizError
 
 
-def organize_text(raw_text: str, assistant_db=None, name_map=None) -> dict:
+def organize_text(raw_text: str, assistant_db=None, name_map=None, not_assistant=None) -> dict:
     """解析原始聊天记录 → 整理为【客户】/【助理A】纯标签文本。
 
     输入为任意 multiparser 可识别格式（用户真实格式为三行式：发送人/时间戳/内容）；
@@ -17,7 +17,7 @@ def organize_text(raw_text: str, assistant_db=None, name_map=None) -> dict:
     同一簇（同显示名/员工）恒为同一字母。解析失败（空/不可识别）→ BizError 400。
     """
     try:
-        result = multiparser.parse_multi(raw_text, assistant_db, name_map)
+        result = multiparser.parse_multi(raw_text, assistant_db, name_map, not_assistant)
     except ParseError as exc:
         raise BizError("organize_failed", str(exc), status_code=400) from exc
     # 簇 → 字母：按簇内消息首次出现（最小 turn_no）排序分配 A/B/C…
