@@ -104,6 +104,22 @@
     failed: { label: "失败", cls: "badge-critical" },
   };
 
+  // 客户当前情绪标签（progress 附加 current_emotion；报告页内查看完整情绪分析）
+  const EMOJI = {
+    "积极/认可": "😄", "中性": "😐", "担忧": "😟", "焦虑": "😰",
+    "不满": "😠", "愤怒": "🤬", "失望": "😞", "怀疑": "🤨",
+  };
+  const EMO_LEVEL = {
+    "积极/认可": "good", "中性": "neutral", "担忧": "warning", "怀疑": "warning",
+    "失望": "critical", "焦虑": "critical", "不满": "critical", "愤怒": "critical",
+  };
+
+  function emotionBadge(cur) {
+    if (!cur || !cur.emotion) return "";
+    const cls = EMO_LEVEL[cur.emotion] || "neutral";
+    return `<span class="badge badge-${cls}" title="客户当前情绪：${UI.esc(cur.emotion)}（强度 ${cur.intensity ?? "-"}）">${EMOJI[cur.emotion] || ""} ${UI.esc(cur.emotion)}</span>`;
+  }
+
   function statusBadge(status) {
     const m = STATUS_META[status] || STATUS_META.pending;
     return `<span class="badge ${m.cls}">${m.label}</span>`;
@@ -336,7 +352,7 @@ Excel 房间对话导出（含「完整聊天记录」列）自动按房间识�
         : '<span class="muted">-</span>';
       return `<tr>
         <td class="num muted">${UI.esc(t.task_id)}</td>
-        <td><b>${UI.esc(t.customer_name)}</b></td>
+        <td><b>${UI.esc(t.customer_name)}</b> ${emotionBadge(t.current_emotion)}</td>
         <td>${(t.assistant_names || []).map((n) => `<span class="tag">${UI.esc(n)}</span>`).join(" ") || '<span class="muted">-</span>'}</td>
         <td class="num">${t.message_count}</td>
         <td>${statusBadge(t.status)}${t.retry_count ? `<span class="muted" style="font-size:11px">重试${t.retry_count}次</span>` : ""}</td>

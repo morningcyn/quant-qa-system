@@ -87,12 +87,14 @@ async def start_batch(batch_id: str, session: Session = Depends(get_db)):
     return {"batch_id": batch_id, "started": started}
 
 
-def _task_item(task) -> dict:
+def _task_item(task, current_emotion: dict | None = None) -> dict:
     result = json.loads(task.result_json) if task.result_json else None
     reports = (result or {}).get("reports") or []
     data = json.loads(task.input_data) if task.input_data else {}
     return {
         "task_id": task.task_id,
+        # 客户当前情绪摘要（批量评分时已自动分析；未生成/失败为 null）——进度页任务行标签
+        "current_emotion": current_emotion,
         "customer_id": task.customer_id,
         "customer_name": task.customer_name,
         "assistant_ids": json.loads(task.assistant_ids_json or "[]"),
@@ -128,6 +130,11 @@ def batch_progress(batch_id: str, session: Session = Depends(get_db)):
     run = brepo.get_batch(session, batch_id)
     if run is None:
         raise HTTPException(status_code=404, detail="批次不存在")
+    # 批量读出本批次全部情绪行（conversation_id=batch_id:task_id），避免每任务一次查询
+    emotions = {
+        emo.conversation_id: json.loads(emo.summary_json).get("current")
+        for emo in repository.list_emotion_sessions_by_conversation_prefix(session, f"{batch_id}:")
+    }
     return {
         "batch_id": run.batch_id,
         "title": run.title,
@@ -135,7 +142,10 @@ def batch_progress(batch_id: str, session: Session = Depends(get_db)):
         "stats": brepo.task_stats(session, batch_id),
         "source_stats": json.loads(run.source_stats_json or "{}"),
         "warnings": json.loads(run.warnings_json or "[]"),
-        "items": [_task_item(t) for t in brepo.list_tasks(session, batch_id)],
+        "items": [
+            _task_item(t, current_emotion=emotions.get(f"{batch_id}:{t.task_id}"))
+            for t in brepo.list_tasks(session, batch_id)
+        ],
     }
 
 

@@ -276,6 +276,11 @@
         <h2 class="mt-24 mb-8">改进建议</h2>
         ${suggestions || `<div class="empty">暂无建议</div>`}
 
+        <div class="card mt-16" id="emotion-card">
+          <div class="card-title">📊 客户情绪分析</div>
+          <div id="emotion-body"></div>
+        </div>
+
         <h2 class="mt-24 mb-8">原始对话</h2>
         <div class="collapse" id="collapse-raw">
           <div class="collapse-head">
@@ -345,6 +350,9 @@
     document.getElementById("btn-png2").addEventListener("click", doPNG);
     document.getElementById("btn-pdf").addEventListener("click", doPDF);
     document.getElementById("btn-pdf2").addEventListener("click", doPDF);
+
+    // 客户情绪分析卡（独立端点取数，不影响报告主数据）
+    if (window.EmotionCard) EmotionCard.init(app, r);
   }
 
   Views.report = {

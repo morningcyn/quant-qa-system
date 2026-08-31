@@ -26,6 +26,37 @@
   --mono: "Consolas", "SFMono-Regular", monospace;
 }
 
+/* 浅色主题覆盖（全部 hex/rgba，html2canvas 约束）。对比度原则：强调色取加深版本
+   （暗色用的亮色在白底上对比不足），次要文字 --text-3 用中灰而非太浅的灰。 */
+:root[data-theme="light"] {
+  --bg: #f2f2ef;
+  --surface: #ffffff;
+  --surface-2: #f7f7f5;
+  --surface-3: #ebebe8;
+  --border: #e0e0dc;
+  --axis: #cfcfc9;
+  --text: #1b1b19;
+  --text-2: #4a4a45;
+  --text-3: #6f6f68;
+  --d-blue: #1c6fc9;
+  --d-blue-dim: rgba(28, 111, 201, 0.10);
+  --s-teal: #12825c;
+  --s-teal-dim: rgba(18, 130, 92, 0.10);
+  --good: #0e9414;
+  --good-dim: rgba(14, 148, 20, 0.12);
+  --warning: #b57400;
+  --warning-dim: rgba(181, 116, 0, 0.14);
+  --critical: #c22e2e;
+  --critical-dim: rgba(194, 46, 46, 0.12);
+  --shadow: 0 6px 24px rgba(0, 0, 0, 0.12);
+}
+
+/* 浅色下顶部导航条背景（暗色 rgba(13,13,13,0.92) 的浅色对应） */
+:root[data-theme="light"] #topbar {
+  background: rgba(255, 255, 255, 0.92);
+  border-bottom-color: #e0e0dc;
+}
+
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
 html, body {
@@ -70,7 +101,15 @@ h3 { font-size: 14px; font-weight: 600; }
   background: linear-gradient(135deg, var(--d-blue), var(--s-teal));
 }
 .brand-name { font-weight: 600; font-size: 15px; letter-spacing: 0.4px; }
+.topbar-right { display: flex; align-items: center; gap: 8px; }
 #topnav { display: flex; gap: 4px; }
+.theme-toggle {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; border-radius: var(--radius-sm);
+  border: 1px solid var(--axis); background: transparent; color: var(--text-2);
+  font-size: 14px; cursor: pointer; transition: background 0.15s, color 0.15s;
+}
+.theme-toggle:hover { background: var(--surface-2); color: var(--text); }
 #topnav a {
   color: var(--text-2); padding: 6px 14px; border-radius: var(--radius-sm);
   font-size: 13px; transition: background 0.15s, color 0.15s;

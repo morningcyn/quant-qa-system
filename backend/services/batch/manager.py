@@ -13,6 +13,7 @@ from backend.db import batch_repository as brepo
 from backend.db import repository
 from backend.db.database import SessionLocal
 from backend.services import multiparser, report as report_service, scoring
+from backend.services.emotion import analyzer as emotion_analyzer
 from backend.services.batch import aggregator, chunker
 from backend.services.batch.splitter import dict_to_message
 from backend.services.dispatcher import generate_overview
@@ -190,11 +191,31 @@ class BatchTaskManager:
             except Exception:  # noqa: BLE001 总览失败不影响报告落库（报告已生成可查看）
                 logger.exception("batch 总览生成失败: %s/%s", task.batch_id, task.task_id)
                 session.rollback()  # 落库失败会污染 session（PendingRollback），回滚后任务状态才能正常更新
+        # ⑤ 客户情绪分析（一次性：失败绝不影响任务状态，只记日志；落库失败回滚防 PendingRollback）。
+        #    情绪锚点用「batch_id:task_id」每任务独立（emotion_sessions.conversation_id 有 UNIQUE 约束，
+        #    批次内任务共享 batch_id 会冲突；与总览锚点规则一致）。
+        emotion_id = None
+        try:
+            emo = await emotion_analyzer.analyze_session(
+                session,
+                msgs=msgs,
+                title=title,
+                conversation_id=f"{task.batch_id}:{task.task_id}",
+                source_type="batch",
+                customer_name=task.customer_name,
+                client=client,
+                cfg=cfg,
+            )
+            emotion_id = emo.id if emo else None  # emo=None = 会话无客户消息，静默跳过
+        except Exception:  # noqa: BLE001 情绪分析失败不影响评分任务（报告已生成可查看）
+            logger.exception("batch 情绪分析失败: %s/%s", task.batch_id, task.task_id)
+            session.rollback()
         return {
             "reports": reports,
             "errors": errors,
             "chunk_count": sum(r["chunk_count"] for r in reports),
             "overview_id": overview_id,
+            "emotion_id": emotion_id,
         }
 
     async def _score_one_cluster(self, session, assistant, cluster, client, cfg, title, chunk_params, batch_id) -> dict:

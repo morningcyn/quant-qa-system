@@ -1,13 +1,9 @@
-// ECharts 暗色封装：初始化、雷达图、趋势折线、Top3 条形
+// ECharts 封装：雷达图、趋势折线、Top3 条形（调色板随深浅色主题注入）
+// 图表为 canvas 渲染，option 无法写 var() —— 启动时经 Theme.colors() 读 CSS 变量
 (function () {
   "use strict";
 
-  const COLORS = {
-    text: "#ffffff", text2: "#c3c2b7", text3: "#898781",
-    grid: "#2c2c2a", axis: "#383835",
-    dBlue: "#3987e5", sTeal: "#199e70",
-    good: "#0ca30c", warning: "#fab219", critical: "#d03b3b",
-  };
+  const COLORS = window.Theme.colors();
 
   function baseOption() {
     return {
@@ -19,10 +15,10 @@
   function tooltip() {
     return {
       trigger: "item",
-      backgroundColor: "#21211f",
-      borderColor: "#383835",
-      textStyle: { color: "#ffffff", fontSize: 12 },
-      extraCssText: "box-shadow: 0 6px 24px rgba(0,0,0,0.45); border-radius: 6px;",
+      backgroundColor: COLORS.tooltip.bg,
+      borderColor: COLORS.tooltip.border,
+      textStyle: { color: COLORS.tooltip.text, fontSize: 12 },
+      extraCssText: `box-shadow: ${COLORS.tooltip.shadow}; border-radius: 6px;`,
     };
   }
 
@@ -38,7 +34,7 @@
         splitNumber: 4,
         axisName: { color: COLORS.text2, fontSize: 12 },
         splitLine: { lineStyle: { color: [COLORS.grid] } },
-        splitArea: { areaStyle: { color: ["transparent", "rgba(255,255,255,0.02)"] } },
+        splitArea: { areaStyle: { color: ["transparent", COLORS.splitArea] } },
         axisLine: { lineStyle: { color: COLORS.axis } },
       },
       series: series.map((s) => ({
@@ -67,7 +63,7 @@
     const option = Object.assign(baseOption(), {
       tooltip: Object.assign(tooltip(), {
         trigger: "axis",
-        axisPointer: { type: "cross", label: { backgroundColor: "#383835" } },
+        axisPointer: { type: "cross", label: { backgroundColor: COLORS.axisPointer } },
         formatter: (params) => {
           const p = points[params[0].dataIndex];
           if (p.avg_score === null) return `${p.date}<br/>无质检记录`;
@@ -97,7 +93,7 @@
           lineStyle: { color: COLORS.warning, type: "dashed", width: 1 },
           data: [{ yAxis: threshold }],
         },
-        areaStyle: { color: "rgba(57, 135, 229, 0.10)" },
+        areaStyle: { color: COLORS.trendArea },
       }],
     });
     chart.setOption(option);

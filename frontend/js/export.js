@@ -12,7 +12,7 @@
   async function canvasOf(el) {
     return html2canvas(el, {
       scale: 2,
-      backgroundColor: "#0d0d0d",
+      backgroundColor: window.Theme.colors().bg, // 跟随当前主题，浅色导出为浅底
       useCORS: false,
       logging: false,
     });

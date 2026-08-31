@@ -6,6 +6,9 @@ import ctypes.wintypes as wt
 import sys
 
 PREFIX = "dpapi:"
+# DPAPI 不可用时仍沿用 PREFIX 作为外层格式，保证已有配置格式兼容；
+# 在回退内容中加入标记，使解密时能够区分“回退 base64”与真正的 DPAPI 密文。
+_FALLBACK_MARKER = b"quant-qa-b64-fallback-v1:\x00"
 
 if sys.platform == "win32":
     crypt32 = ctypes.WinDLL("crypt32")  # noqa: PGH003
@@ -36,11 +39,16 @@ def _free_blob(blob):
 
 
 def encrypt_secret(plain: str) -> str:
-    """加密 API Key 等敏感配置，返回 "dpapi:<base64>"。非 Windows 平台退化为 base64 存储。"""
+    """加密 API Key 等敏感配置，返回 ``dpapi:<base64>``。
+
+    非 Windows 平台，或 Windows DPAPI 调用失败时，退化为带标记的 base64
+    存储。外层仍使用 ``dpapi:`` 是为了兼容已有数据库格式；标记用于解密
+    时避免再次把回退内容当作 DPAPI 密文处理。
+    """
     if not plain:
         return ""
     if crypt32 is None:
-        return PREFIX + base64.b64encode(plain.encode("utf-8")).decode()
+        return PREFIX + base64.b64encode(_FALLBACK_MARKER + plain.encode("utf-8")).decode()
     data = plain.encode("utf-16-le")  # DPAPI 内部按 Unicode 处理
     blob_in = _blob_from_bytes(data)
     blob_out = _DATA_BLOB()
@@ -51,7 +59,7 @@ def encrypt_secret(plain: str) -> str:
             return PREFIX + base64.b64encode(_blob_to_bytes(blob_out)).decode()
         finally:
             _free_blob(blob_out)
-    return PREFIX + base64.b64encode(plain.encode("utf-8")).decode()
+    return PREFIX + base64.b64encode(_FALLBACK_MARKER + plain.encode("utf-8")).decode()
 
 
 def decrypt_secret(stored: str):
@@ -67,7 +75,9 @@ def decrypt_secret(stored: str):
         return None
     if crypt32 is None:
         try:
-            return raw.decode("utf-8")
+            if not raw.startswith(_FALLBACK_MARKER):
+                return None
+            return raw[len(_FALLBACK_MARKER):].decode("utf-8")
         except Exception:  # noqa: BLE001
             return None
     blob_in = _blob_from_bytes(raw)
@@ -80,4 +90,11 @@ def decrypt_secret(stored: str):
             return dec.decode("utf-16-le", errors="ignore").rstrip("\x00")
         finally:
             _free_blob(blob_out)
-    return None
+    # 兼容 DPAPI 调用失败时旧版本写入的无标记 base64 回退密文；新写入的
+    # 回退密文必须带标记。损坏的 base64 或无法按 UTF-8 解码的内容仍返回 None。
+    try:
+        if raw.startswith(_FALLBACK_MARKER):
+            return raw[len(_FALLBACK_MARKER):].decode("utf-8")
+        return raw.decode("utf-8")
+    except Exception:  # noqa: BLE001
+        return None

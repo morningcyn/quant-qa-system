@@ -6,7 +6,15 @@ from typing import Any
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session
 
-from backend.db.models import Assistant, Inspection, InspectionDetail, ScoreTemplate, ServiceOverview, Setting
+from backend.db.models import (
+    Assistant,
+    EmotionSession,
+    Inspection,
+    InspectionDetail,
+    ScoreTemplate,
+    ServiceOverview,
+    Setting,
+)
 
 
 # ---------- assistants ----------
@@ -323,6 +331,56 @@ def set_setting_json(session: Session, key: str, value: Any) -> None:
 def delete_setting(session: Session, key: str) -> None:
     session.execute(delete(Setting).where(Setting.key == key))
     session.commit()
+
+
+# ---------- emotion_sessions（客户情绪分析） ----------
+
+def get_overview_by_conversation(session: Session, conversation_id: str) -> ServiceOverview | None:
+    """按会话锚点查总览（多人质检情绪分析的消息重建事实源；批量路径不经过此处）。"""
+    return session.scalar(select(ServiceOverview).where(ServiceOverview.conversation_id == conversation_id))
+
+
+def save_emotion_session(
+    session: Session,
+    conversation_id: str,
+    source_type: str,
+    title: str | None,
+    customer_name: str | None,
+    items: list[dict],
+    summary: dict,
+    messages: list[dict],
+    degraded: bool,
+    warning: str | None = None,
+) -> EmotionSession:
+    """落库（幂等 upsert）：同锚点先删后插——重复分析覆盖旧结果，UNIQUE 约束不冲突。"""
+    session.execute(delete(EmotionSession).where(EmotionSession.conversation_id == conversation_id))
+    obj = EmotionSession(
+        conversation_id=conversation_id,
+        source_type=source_type,
+        title=(title or "").strip() or None,
+        customer_name=(customer_name or "").strip() or None,
+        items_json=json.dumps(items, ensure_ascii=False),
+        summary_json=json.dumps(summary, ensure_ascii=False),
+        messages_json=json.dumps(messages, ensure_ascii=False),
+        degraded=degraded,
+        warning=warning,
+    )
+    session.add(obj)
+    session.commit()
+    return obj
+
+
+def get_emotion_session_by_conversation(session: Session, conversation_id: str) -> EmotionSession | None:
+    return session.scalar(select(EmotionSession).where(EmotionSession.conversation_id == conversation_id))
+
+
+def list_emotion_sessions_by_conversation_prefix(session: Session, prefix: str) -> list[EmotionSession]:
+    """批量进度页：一次查出批次全部任务的情绪行（conversation_id = f"{batch_id}:{task_id}"）。"""
+    return list(
+        session.scalars(
+            select(EmotionSession).where(EmotionSession.conversation_id.like(prefix + "%"))
+        )
+    )
 
 
 # ---------- 通用 ----------

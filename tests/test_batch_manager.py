@@ -296,8 +296,12 @@ class TestBatchTaskManager:
             "韩珂龙头班\n2026-08-03 10:01:00\n好的\n"
         )
         batch_id, _ = make_batch(factory, raw, employees=[("段勇亮", "E003")], name_map={"韩珂龙头班": "段勇亮"})
-        # 响应队列：任务1 3 次 timeout；任务2/3 各 1 次成功
-        responses = [LLMError("timeout", "mock 超时")] * 3 + [valid_llm_json(), valid_llm_json()]
+        # 响应队列：任务1 3 次 timeout；任务2/3 各 = 评分 1 次 + 情绪 1 次
+        responses = (
+            [LLMError("timeout", "mock 超时")] * 3
+            + [valid_llm_json(), emotion_items_json([1, 3, 5])]
+            + [valid_llm_json(), emotion_items_json([1, 3, 5])]
+        )
         mock_runtime(monkeypatch, MockLLMClient(responses))
         with factory() as s:
             tasks = brepo.list_tasks(s, batch_id)
@@ -537,3 +541,165 @@ class TestAggregator:
         merged = _fallback_merge([r1, r2])
         assert merged.is_red_alert is True
         assert "承诺收益" in merged.red_alert_reasons
+
+
+def emotion_items_json(turn_nos, emotion="担忧", intensity=2, trigger="行情波动"):
+    return json.dumps(
+        {
+            "items": [
+                {"turn_no": t, "emotion": emotion, "intensity": intensity,
+                 "confidence": 0.9, "trigger": trigger, "evidence": "好的"}
+                for t in turn_nos
+            ]
+        },
+        ensure_ascii=False,
+    )
+
+
+def customer_turn_nos(factory, batch_id):
+    """从任务 input_data 取客轮 turn_no 列表（情绪 mock 输出需要精确编号）。"""
+    with factory() as s:
+        task = brepo.list_tasks(s, batch_id)[0]
+        data = json.loads(task.input_data)
+        return [m["turn_no"] for m in data["messages"] if m["role"] == "客"]
+
+
+def emotion_row(factory, conversation_id):
+    with factory() as s:
+        return repository.get_emotion_session_by_conversation(s, conversation_id)
+
+
+class TestBatchEmotion:
+    """批量任务评分时自动情绪分析：情绪行存在 / 失败不影响任务状态。"""
+
+    def test_emotion_auto_analyzed_task_completes(self, env, monkeypatch):
+        """多助理任务：评分 + 总览 + 情绪分析全部完成后任务 completed，情绪行落库。"""
+        from tests.conftest import MockLLMByUserClient, overview_llm_json
+
+        factory = env
+        raw = (
+            "客户甲\n2026-08-01 10:00:00\n有点慌\n\n"
+            "韩珂龙头班\n2026-08-01 10:01:00\n您好，帮您看看\n\n"
+            "客户甲\n2026-08-01 10:02:00\n好的谢谢\n\n"
+            "李金潓\n2026-08-01 10:03:00\n不客气，有情况随时联系\n"
+        )
+        batch_id, _ = make_batch(
+            factory,
+            raw,
+            employees=[("段勇亮", "E003"), ("李金潓", "E004")],
+            name_map={"韩珂龙头班": "段勇亮"},
+        )
+        turns = customer_turn_nos(factory, batch_id)
+        assert turns == [1, 3]
+        # 情绪输出：turn1 焦虑 / turn3 中性（末条客轮 → 当前情绪=中性）
+        emo_json = json.dumps(
+            {
+                "items": [
+                    {"turn_no": 1, "emotion": "焦虑", "intensity": 3, "confidence": 0.9, "trigger": "行情波动", "evidence": "好的"},
+                    {"turn_no": 3, "emotion": "中性", "intensity": 0, "confidence": 0.9, "trigger": "未知", "evidence": "好的"},
+                ]
+            },
+            ensure_ascii=False,
+        )
+        # 路由顺序：总览 → 情绪（特征词「逐条标注情绪」）→ 评分（「员工姓名」）
+        routes = [
+            ("请按系统提示输出总览 JSON", overview_llm_json()),
+            ("请对以下客户消息逐条标注情绪", emo_json),
+            ("员工姓名", valid_llm_json()),
+        ]
+        mock_runtime(monkeypatch, MockLLMByUserClient(routes))
+        with factory() as s:
+            task = brepo.list_tasks(s, batch_id)[0]
+        import asyncio
+
+        asyncio.run(mgr._run_task(task))
+        status, retry, error, result_json = task_status(factory, batch_id)
+        assert status == "completed" and retry == 0 and error is None
+        result = json.loads(result_json)
+        assert result["emotion_id"]  # 情绪行 id 回写 result_json
+        assert len(result["reports"]) == 2  # 报告照常
+        # 情绪行：锚点 batch_id:task_id，当前情绪=末条客轮（中性）
+        row = emotion_row(factory, f"{batch_id}:task_001")
+        assert row is not None and row.source_type == "batch"
+        assert row.customer_name  # 客户昵称（split_customers 首个客侧 speaker）
+        summary = json.loads(row.summary_json)
+        assert summary["current"]["emotion"] == "中性"
+        assert summary["changes"]["improved"] == 1  # 焦虑→中性
+        assert [p["assistant_name"] for p in summary["per_assistant"]] == ["段勇亮"]  # 仅段勇亮有可评估前后对
+
+    def test_emotion_llm_failure_still_completed(self, env, monkeypatch):
+        """情绪 LLM 失败：任务仍 completed、无情绪行、emotion_id=None（不影响评分）。"""
+        from tests.conftest import MockLLMByUserClient, overview_llm_json
+
+        factory = env
+        raw = (
+            "客户甲\n2026-08-01 10:00:00\n有点慌\n\n"
+            "韩珂龙头班\n2026-08-01 10:01:00\n您好，帮您看看\n\n"
+            "客户甲\n2026-08-01 10:02:00\n好的谢谢\n\n"
+            "李金潓\n2026-08-01 10:03:00\n不客气\n"
+        )
+        batch_id, _ = make_batch(
+            factory,
+            raw,
+            employees=[("段勇亮", "E003"), ("李金潓", "E004")],
+            name_map={"韩珂龙头班": "段勇亮"},
+        )
+        routes = [
+            ("请按系统提示输出总览 JSON", overview_llm_json()),
+            ("请对以下客户消息逐条标注情绪", LLMError("network", "mock 情绪网络错误")),
+            ("员工姓名", valid_llm_json()),
+        ]
+        mock_runtime(monkeypatch, MockLLMByUserClient(routes))
+        with factory() as s:
+            task = brepo.list_tasks(s, batch_id)[0]
+        import asyncio
+
+        asyncio.run(mgr._run_task(task))
+        status, retry, error, result_json = task_status(factory, batch_id)
+        assert status == "completed" and error is None
+        result = json.loads(result_json)
+        assert result["emotion_id"] is None
+        assert len(result["reports"]) == 2  # 评分报告不受影响
+        assert emotion_row(factory, f"{batch_id}:task_001") is None
+
+    def test_emotion_save_failure_still_completed(self, env, monkeypatch):
+        """情绪落库失败（UNIQUE 冲突模拟）：session 回滚后任务仍 completed。"""
+        from tests.conftest import MockLLMByUserClient, overview_llm_json
+
+        factory = env
+        raw = (
+            "客户甲\n2026-08-01 10:00:00\n有点慌\n\n"
+            "韩珂龙头班\n2026-08-01 10:01:00\n您好，帮您看看\n\n"
+            "客户甲\n2026-08-01 10:02:00\n好的谢谢\n\n"
+            "李金潓\n2026-08-01 10:03:00\n不客气\n"
+        )
+        batch_id, _ = make_batch(
+            factory,
+            raw,
+            employees=[("段勇亮", "E003"), ("李金潓", "E004")],
+            name_map={"韩珂龙头班": "段勇亮"},
+        )
+        routes = [
+            ("请按系统提示输出总览 JSON", overview_llm_json()),
+            ("请对以下客户消息逐条标注情绪", emotion_items_json([1, 3])),
+            ("员工姓名", valid_llm_json()),
+        ]
+        mock_runtime(monkeypatch, MockLLMByUserClient(routes))
+
+        import sqlite3
+
+        def boom(*a, **k):
+            raise sqlite3.IntegrityError("UNIQUE constraint failed: emotion_sessions.conversation_id")
+
+        monkeypatch.setattr("backend.services.emotion.analyzer.repository.save_emotion_session", boom)
+        with factory() as s:
+            task = brepo.list_tasks(s, batch_id)[0]
+        import asyncio
+
+        asyncio.run(mgr._run_task(task))
+        status, retry, error, result_json = task_status(factory, batch_id)
+        assert status == "completed" and retry == 0 and error is None
+        result = json.loads(result_json)
+        assert result["emotion_id"] is None
+        assert len(result["reports"]) == 2  # 报告照常落库（各自独立事务）
+        assert result["overview_id"]  # 总览也不受影响

@@ -99,6 +99,31 @@ class ServiceOverview(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.now)
 
 
+class EmotionSession(Base):
+    """客户情绪分析：一个客户会话一行。
+
+    conversation_id 锚点规则与总览一致——多人质检=uuid4().hex；批量评分=f"{batch_id}:{task_id}"
+    （批次内任务共享 batch_id，UNIQUE 约束下必须任务级锚点）。
+    items 为逐条客户消息的情绪标注（LLM 输出 + synthesized/evidence_adjusted 服务端标记），
+    summary 为派生统计（时间线/变化计数/各助理改善率），messages 为输入 LLM 的消息快照。
+    """
+
+    __tablename__ = "emotion_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    conversation_id: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    # "multi"（多人质检）| "batch"（批量评分）
+    source_type: Mapped[str] = mapped_column(String(20), nullable=False, default="multi")
+    title: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    customer_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    items_json: Mapped[str] = mapped_column(Text, nullable=False)
+    summary_json: Mapped[str] = mapped_column(Text, nullable=False)
+    messages_json: Mapped[str] = mapped_column(Text, nullable=False)
+    degraded: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    warning: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.now)
+
+
 class ScoreTemplate(Base):
     __tablename__ = "score_templates"
 
