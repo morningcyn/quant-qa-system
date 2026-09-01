@@ -1,5 +1,6 @@
 # 客户情绪确定性派生：情绪变化 / 助理效果归属 / 会话摘要
 # 全部为纯规则计算（可复现、不依赖 LLM），LLM 只负责逐条情绪标注。
+from datetime import date, datetime, time, timezone
 from typing import Any
 
 # 负面情绪集合（积极/认可、中性 之外的 6 类）
@@ -38,6 +39,53 @@ EMOTION_SCORE = {
 
 # confidence 低于该值 → 前端标记「低置信度」（synthesized 合成项恒为 0.0，自然落入）
 LOW_CONFIDENCE_THRESHOLD = 0.5
+
+
+def _message_value(message: Any, key: str, default=None):
+    """读取消息对象或快照字典中的字段。"""
+    if isinstance(message, dict):
+        return message.get(key, default)
+    return getattr(message, key, default)
+
+
+def _parse_timestamp(value: Any) -> tuple[str, datetime] | None:
+    """解析曲线排序所需的时间戳，兼容 ISO 日期时间、日期和纯时间。"""
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    normalized = text.replace("T", " ").replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(normalized)
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+        return "datetime", parsed
+    except ValueError:
+        pass
+    try:
+        parsed_time = time.fromisoformat(text)
+        return "time", datetime.combine(date.min, parsed_time)
+    except ValueError:
+        return None
+
+
+def _ordered_messages(messages: list) -> tuple[list, bool]:
+    """按真实时间排序；时间不完整时保留原轮次顺序并标记为降级。"""
+    indexed = list(enumerate(messages))
+    parsed = [_parse_timestamp(_message_value(message, "timestamp")) for _, message in indexed]
+    complete = bool(indexed) and all(value is not None for value in parsed)
+    same_kind = complete and len({value[0] for value in parsed}) == 1
+    if same_kind:
+        ordered = [
+            message
+            for (original_index, message), _ in sorted(
+                zip(indexed, parsed),
+                key=lambda pair: (pair[1][1], _message_value(pair[0][1], "turn_no", 0), pair[0][0]),
+            )
+        ]
+        return ordered, True
+    return [message for _, message in sorted(indexed, key=lambda pair: (_message_value(pair[1], "turn_no", 0), pair[0]))], False
 
 # 情绪颜色（前端 chip 用，主题色系）
 EMOTION_LEVEL = {
@@ -90,10 +138,11 @@ def build_summary(messages: list, items: list[dict]) -> dict:
     items 已按 turn_no 对齐（含 synthesized 合成项，保证每条客轮都有情绪）。
     """
     items_by_turn = {it["turn_no"]: it for it in items}
-    # 客轮（时间序）与助轮列表
-    cust = [m for m in messages if getattr(m, "role", None) == "客"]
-    asst = [m for m in messages if getattr(m, "role", None) == "助"]
-    asst.sort(key=lambda m: m.turn_no)
+    # 客轮与助轮都使用同一份真实时间序列，避免 turn_no 与时间戳不一致时错配。
+    ordered_messages, _ = _ordered_messages(messages)
+    cust = [m for m in ordered_messages if getattr(m, "role", None) == "客"]
+    asst = [m for m in ordered_messages if getattr(m, "role", None) == "助"]
+    positions = {id(message): index for index, message in enumerate(ordered_messages)}
 
     timeline: list[dict] = []
     changes = {"total": 0, "improved": 0, "worsened": 0, "unchanged": 0, "not_judged": 0}
@@ -118,7 +167,7 @@ def build_summary(messages: list, items: list[dict]) -> dict:
         it = items_by_turn.get(m.turn_no)
         if not it:
             continue
-        prev_asst = [a for a in asst if a.turn_no < m.turn_no]
+        prev_asst = [a for a in asst if positions[id(a)] < positions[id(m)]]
         if prev_asst and it["emotion"] in NEGATIVE_EMOTIONS:
             bucket(_assistant_key(prev_asst[-1]))["negative_count"] += 1
 
@@ -139,7 +188,7 @@ def build_summary(messages: list, items: list[dict]) -> dict:
             item["change"] = None
             timeline.append(item)
             continue
-        between = [a for a in asst if prev.turn_no < a.turn_no < m.turn_no]
+        between = [a for a in asst if positions[id(prev)] < positions[id(a)] < positions[id(m)]]
         chg = emotion_change(prev_it, it)
         changes["total"] += 1
         changes[chg] += 1
@@ -219,9 +268,8 @@ def build_curve(messages_rows: list[dict], items: list[dict]) -> dict:
       旧：{turn_no, speaker, text}（仅客户消息）→ 无时间戳/无助理节点，degraded=true
     items 为逐条情绪（旧行可能缺 emotion_score，按 EMOTION_SCORE 补算）。
     """
-    rows = sorted(messages_rows, key=lambda r: r.get("turn_no", 0))
+    rows, has_ts = _ordered_messages(messages_rows)
     items_by_turn = {it["turn_no"]: it for it in items}
-    has_ts = any(r.get("timestamp") for r in rows)
     has_asst = any(r.get("role") == "助" for r in rows)
     degraded = not (has_ts and has_asst)
 
@@ -234,6 +282,7 @@ def build_curve(messages_rows: list[dict], items: list[dict]) -> dict:
 
     cust_rows = [r for r in rows if role_of(r) == "客"]
     asst_rows = [r for r in rows if role_of(r) == "助"]
+    positions = {id(row): index for index, row in enumerate(rows)}
 
     def brief(it: dict) -> dict:
         return {"turn_no": it["turn_no"], "emotion": it["emotion"], "emotion_score": _score(it)}
@@ -244,13 +293,15 @@ def build_curve(messages_rows: list[dict], items: list[dict]) -> dict:
         for r in asst_rows:
             before = after = None
             for c in cust_rows:
-                if c["turn_no"] >= r["turn_no"]:
+                if positions[id(c)] >= positions[id(r)]:
                     break
                 it = items_by_turn.get(c["turn_no"])
                 if it:
                     before = brief(it)
             for c in cust_rows:
-                if c["turn_no"] > r["turn_no"]:
+                if positions[id(c)] <= positions[id(r)]:
+                    continue
+                if positions[id(c)] > positions[id(r)]:
                     it = items_by_turn.get(c["turn_no"])
                     if it:
                         after = brief(it)
@@ -260,6 +311,7 @@ def build_curve(messages_rows: list[dict], items: list[dict]) -> dict:
                 change = emotion_change(items_by_turn[before["turn_no"]], items_by_turn[after["turn_no"]])
             assistant_replies.append(
                 {
+                    "sequence": positions[id(r)],
                     "turn_no": r.get("turn_no"),
                     "assistant_id": r.get("assistant_id"),
                     "assistant_name": r.get("canonical_name") or r.get("speaker") or "未识别",
@@ -302,7 +354,7 @@ def build_curve(messages_rows: list[dict], items: list[dict]) -> dict:
             key=lambda r: (
                 _score(items_by_turn[r["turn_no"]]),
                 -items_by_turn[r["turn_no"]].get("intensity", 0),
-                r["turn_no"],
+                positions[id(r)],
             ),
         )
         it = items_by_turn[best["turn_no"]]
@@ -328,7 +380,11 @@ def build_curve(messages_rows: list[dict], items: list[dict]) -> dict:
     if cust_items:
         stats["initial"] = brief(cust_items[0])
         stats["final"] = brief(cust_items[-1])
-        lowest = min(cust_items, key=lambda it: (_score(it), -it.get("intensity", 0), it["turn_no"]))
+        customer_order = {r["turn_no"]: index for index, r in enumerate(cust_rows)}
+        lowest = min(
+            cust_items,
+            key=lambda it: (_score(it), -it.get("intensity", 0), customer_order[it["turn_no"]]),
+        )
         stats["lowest"] = brief(lowest)
         for a, b in zip(cust_items, cust_items[1:]):
             chg = emotion_change(a, b)
@@ -340,6 +396,7 @@ def build_curve(messages_rows: list[dict], items: list[dict]) -> dict:
     # 5) 客轮点时间序列（前端折线 x 轴：时间序 + 分值，助轮位置由前端与 assistant_replies 合并）
     points = [
         {
+            "sequence": positions[id(r)],
             "turn_no": r["turn_no"],
             "timestamp": r.get("timestamp") if has_ts else None,
             "emotion": items_by_turn[r["turn_no"]]["emotion"],

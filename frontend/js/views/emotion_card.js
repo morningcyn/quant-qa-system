@@ -150,26 +150,31 @@
     if (!chartEl || typeof echarts === "undefined") return;
     const curve = d.curve;
     if (!curve) return;
-    // 客轮点（带时间，build_curve 已产出）+ 助理节点（按 turn_no）合并成 x 轴
-    const cust = (d.timeline || []).map((it) => ({
-      kind: "cust", turn_no: it.turn_no, ts: null,
-      emotion: it.emotion, score: scoreOf(it), intensity: it.intensity,
-    }));
-    const tsByTurn = new Map((curve.points || []).map((p) => [p.turn_no, p.timestamp]));
-    cust.forEach((c) => { c.ts = tsByTurn.get(c.turn_no) ?? null; });
+    // 客轮点直接使用后端按时间排序后的 points，避免重新按 turn_no 打乱时间轴。
+    const fallbackTimeline = d.timeline || [];
+    const cust = (curve.points || fallbackTimeline).map((point, index) => {
+      const it = point.emotion ? point : fallbackTimeline.find((x) => x.turn_no === point.turn_no) || point;
+      return {
+        kind: "cust", sequence: point.sequence ?? index * 2, turn_no: point.turn_no,
+        ts: point.timestamp ?? null, emotion: it.emotion, score: scoreOf(point),
+        intensity: point.emotion_intensity ?? it.intensity,
+      };
+    });
     const asst = (curve.assistant_replies || []).map((a) => ({
-      kind: "asst", turn_no: a.turn_no, ts: a.timestamp,
+      kind: "asst", sequence: a.sequence ?? (cust.length * 2 + a.turn_no), turn_no: a.turn_no, ts: a.timestamp,
       emotion: null, score: 0, assistant_name: a.assistant_name,
     }));
-    const xs = [...cust, ...asst].sort((a, b) => a.turn_no - b.turn_no);
+    const xs = [...cust, ...asst].sort((a, b) => a.sequence - b.sequence);
     const labels = xs.map((x) => (x.ts ? fmtTs(x.ts) : `第${x.turn_no}轮`));
     const lineData = xs.map((x) => (x.kind === "cust" ? x.score : null));
     // 助理回复节点：y = 回复时刻客户情绪水平（before 优先，无则 after，都无则 0），
     // 再 ±0.35 偏移避开客户点重合（正情绪偏上、负情绪偏下）；颜色按回复效果
     const asstPts = [];
+    const assistantBySequence = new Map((curve.assistant_replies || []).map((a) => [a.sequence, a]));
     xs.forEach((x, i) => {
       if (x.kind !== "asst") return;
-      const a = (curve.assistant_replies || []).find((r) => r.turn_no === x.turn_no) || {};
+      const a = assistantBySequence.get(x.sequence)
+        || (curve.assistant_replies || []).find((r) => r.turn_no === x.turn_no) || {};
       const base = a.before && a.before.emotion_score != null ? a.before.emotion_score
         : a.after && a.after.emotion_score != null ? a.after.emotion_score : 0;
       // 正情绪偏上、负情绪偏下，±0.35 避开客户点重合；接近绘图边界（+2/-4）时反向
@@ -178,6 +183,7 @@
       const brief = (b) => (b ? `${b.emotion} ${b.emotion_score > 0 ? "+" : ""}${b.emotion_score}` : "无客户消息");
       asstPts.push({
         value: [i, y],
+        _sequence: x.sequence,
         _turn: x.turn_no,
         _name: a.assistant_name || "未识别",
         _ts: a.timestamp ? fmtTs(a.timestamp) : "",
@@ -333,7 +339,8 @@
         if (p.data._kind === "risk") openRiskModal(p.data);
         else openTurningModal(p.data);
       } else if (p.seriesType === "scatter") {
-        const a = (curve.assistant_replies || []).find((x) => x.turn_no === p.data._turn);
+        const a = assistantBySequence.get(p.data._sequence)
+          || (curve.assistant_replies || []).find((x) => x.turn_no === p.data._turn);
         if (a) openAssistantModal(a);
       } else if (p.seriesType === "line") {
         const x0 = xs[p.dataIndex];

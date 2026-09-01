@@ -136,6 +136,27 @@ class TestBuildCurveAssistantReplies:
         chgs = [r["change"] for r in c["assistant_replies"]]
         assert chgs == ["worsened", "improved"]  # 中性→担忧；担忧→中性
 
+    def test_timestamp_order_keeps_reply_bound_to_chronological_customer_emotions(self):
+        """时间戳与 turn_no 不一致时，曲线和助理前后情绪均按真实时间排列。"""
+        rows = [
+            row(1, "客", "先说", timestamp="2026-08-01 10:00:00"),
+            row(2, "客", "后说", timestamp="2026-08-01 10:03:00"),
+            row(3, "助", "针对先说回复", assistant_id=1, canonical_name="王萌", timestamp="2026-08-01 10:01:00"),
+            row(4, "助", "针对后说回复", assistant_id=1, canonical_name="王萌", timestamp="2026-08-01 10:04:00"),
+        ]
+        c = build_curve(rows, [item(1, "焦虑"), item(2, "中性")])
+
+        assert [p["turn_no"] for p in c["points"]] == [1, 2]
+        assert [p["timestamp"] for p in c["points"]] == [
+            "2026-08-01 10:00:00", "2026-08-01 10:03:00"
+        ]
+        first, second = c["assistant_replies"]
+        assert (first["turn_no"], first["before"]["turn_no"], first["after"]["turn_no"]) == (3, 1, 2)
+        assert first["change"] == "improved"
+        assert (second["turn_no"], second["before"]["turn_no"], second["after"]) == (4, 2, None)
+        assert [p["sequence"] for p in c["points"]] == [0, 2]
+        assert [a["sequence"] for a in c["assistant_replies"]] == [1, 3]
+
 
 # ---------- build_curve：转折点（第七节） ----------
 
