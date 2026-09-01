@@ -19,6 +19,41 @@ def assistant(session):
 
 
 class TestPipeline:
+    def test_owned_client_closed_after_success(self, session, assistant, monkeypatch):
+        class ClosingClient(MockLLMClient):
+            def __init__(self):
+                super().__init__([valid_llm_json()])
+                self.closed = False
+
+            async def aclose(self):
+                self.closed = True
+
+        client = ClosingClient()
+        monkeypatch.setattr(pipeline.factory, "get_active_runtime", lambda current_session: (client, {}))
+
+        asyncio.run(pipeline.run_inspection(session, assistant.id, SAMPLE_DIALOGUE))
+
+        assert client.closed is True
+
+    def test_owned_client_closed_after_llm_error(self, session, assistant, monkeypatch):
+        from backend.services.llm.base import LLMError
+
+        class ClosingClient(MockLLMClient):
+            def __init__(self):
+                super().__init__([LLMError("auth", "key invalid")])
+                self.closed = False
+
+            async def aclose(self):
+                self.closed = True
+
+        client = ClosingClient()
+        monkeypatch.setattr(pipeline.factory, "get_active_runtime", lambda current_session: (client, {}))
+
+        with pytest.raises(BizError):
+            asyncio.run(pipeline.run_inspection(session, assistant.id, SAMPLE_DIALOGUE))
+
+        assert client.closed is True
+
     def test_full_chain_success(self, session, assistant):
         client = MockLLMClient([valid_llm_json()])
         inspection = asyncio.run(

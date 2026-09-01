@@ -18,6 +18,10 @@ class BaseLLMClient(ABC):
         self.model = model
         self.timeout = timeout
 
+    async def aclose(self) -> None:
+        """Release client resources when the caller owns the client lifecycle."""
+        return None
+
     @abstractmethod
     async def complete(
         self,

@@ -181,7 +181,8 @@ async def run_inspection(
         context_text=context_text,
     )
     # ③④⑤ 一次主调用（内含归因、黄金改写、建议），带 L1/L2/L3 降级
-    if client is None:
+    owns_client = client is None
+    if owns_client:
         client, cfg = factory.get_active_runtime(session)
     try:
         result = await _call_main_with_fallbacks(
@@ -189,6 +190,9 @@ async def run_inspection(
         )
     except LLMError as exc:
         raise BizError(exc.code, exc.message, status_code=400) from exc
+    finally:
+        if owns_client:
+            await client.aclose()
     # ②' 后端重算熔断与总分（不信任模型算术），红灯一票否决补全，N/A 维度动态分母折算
     # 多助理分段：turn_no 为原始绝对轮次，高亮轮次上界按实际最大轮次校验（与正文编号一致）
     result = scoring.apply_guardrails(result, template, len(parsed.turns), max_turn=max(t.turn_no for t in parsed.turns))

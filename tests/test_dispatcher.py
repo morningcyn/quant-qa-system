@@ -1,6 +1,7 @@
 # 多人质检分发器：并发调用单助理评分 → 各助理报告 + 本次服务总览（含规则降级）
 import asyncio
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -32,6 +33,66 @@ def two_assistants(session):
 
 
 class TestRunMultiInspection:
+    def test_owned_client_closed_after_multi_inspection(self, session, two_assistants, monkeypatch):
+        class ClosingClient(MockLLMByUserClient):
+            def __init__(self):
+                super().__init__([("", valid_llm_json())])
+                self.closed = False
+
+            async def aclose(self):
+                self.closed = True
+
+        client = ClosingClient()
+        monkeypatch.setattr(
+            dispatcher.factory,
+            "get_active_runtime",
+            lambda current_session: (client, {}),
+        )
+
+        out = asyncio.run(
+            dispatcher.run_multi_inspection(session, MULTI_SAMPLE_DIALOGUE, "t", two_assistants)
+        )
+
+        assert out["errors"] == []
+        assert client.closed is True
+    def test_parallel_assistant_scoring_uses_independent_sessions(
+        self, session, two_assistants, monkeypatch
+    ):
+        seen_sessions = []
+
+        async def fake_run_inspection(task_session, *args, **kwargs):
+            seen_sessions.append(task_session)
+            await asyncio.sleep(0)
+            return SimpleNamespace(id=len(seen_sessions))
+
+        async def fake_generate_overview(*args, **kwargs):
+            return SimpleNamespace(id=99)
+
+        monkeypatch.setattr(dispatcher.pipeline, "run_inspection", fake_run_inspection)
+        monkeypatch.setattr(dispatcher.report_service, "build_report_view", lambda *args: {})
+        monkeypatch.setattr(dispatcher, "generate_overview", fake_generate_overview)
+        monkeypatch.setattr(dispatcher.repository, "set_inspection_conversation", lambda *args: None)
+        monkeypatch.setattr(
+            dispatcher.repository,
+            "get_inspection",
+            lambda current_session, inspection_id: SimpleNamespace(id=inspection_id),
+        )
+
+        out = asyncio.run(
+            dispatcher.run_multi_inspection(
+                session,
+                MULTI_SAMPLE_DIALOGUE,
+                "t",
+                two_assistants,
+                client=MockLLMByUserClient([]),
+                cfg={},
+            )
+        )
+
+        assert len(out["reports"]) == 2
+        assert len(seen_sessions) == 2
+        assert len({id(item) for item in seen_sessions}) == 2
+
     def test_happy_path_two_reports_plus_overview(self, session, two_assistants):
         client = MockLLMByUserClient(
             [

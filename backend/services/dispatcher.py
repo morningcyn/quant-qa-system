@@ -3,7 +3,7 @@
 import asyncio
 import uuid
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from backend.db import repository
 from backend.schemas.overview import OverviewResult
@@ -57,23 +57,34 @@ async def run_multi_inspection(
         if repository.get_assistant(session, aid) is None:
             raise BizError("not_found", f"员工不存在（id={aid}）", status_code=404)
     conversation_id = conversation_id or uuid.uuid4().hex
-    if client is None:
+    owns_client = client is None
+    if owns_client:
         client, cfg = factory.get_active_runtime(session)
     # ③ 并发分发：每簇一段独立质检（共享 client/cfg；save_inspection 同步无 await，不会交错）
+    task_session_factory = sessionmaker(
+        bind=session.get_bind(),
+        autoflush=False,
+        expire_on_commit=False,
+    )
+
+    async def run_one_cluster(cluster):
+        with task_session_factory() as task_session:
+            return await pipeline.run_inspection(
+                task_session,
+                mapping[cluster.canonical_name],
+                cluster.segment.text,
+                title,
+                evaluatee=cluster.display_name,
+                client=client,
+                cfg=cfg,
+                pre_parsed_turns=cluster.segment.turns,
+                context_text=cluster.segment.context_text,
+            )
+
     tasks = []
     for c in clusters:
         tasks.append(
-            pipeline.run_inspection(
-                session,
-                mapping[c.canonical_name],
-                c.segment.text,
-                title,
-                evaluatee=c.display_name,
-                client=client,
-                cfg=cfg,
-                pre_parsed_turns=c.segment.turns,
-                context_text=c.segment.context_text,
-            )
+            run_one_cluster(c)
         )
     results = await asyncio.gather(*tasks, return_exceptions=True)
     reports, errors = [], []
@@ -85,15 +96,30 @@ async def run_multi_inspection(
             )
             continue
         repository.set_inspection_conversation(session, res.id, conversation_id)
-        view = report_service.build_report_view(session, res)
+        inspection = repository.get_inspection(session, res.id)
+        if inspection is None:
+            errors.append(
+                {
+                    "canonical_name": c.canonical_name,
+                    "display_name": c.display_name,
+                    "code": "persistence_error",
+                    "message": "质检结果已生成，但主会话无法读取结果",
+                }
+            )
+            continue
+        view = report_service.build_report_view(session, inspection)
         view["canonical_name"] = c.canonical_name
         view["reply_count"] = len(c.reply_turn_nos)
         view["reply_turn_range"] = f"{c.reply_turn_nos[0]}-{c.reply_turn_nos[-1]}" if c.reply_turn_nos else ""
         reports.append(view)
     if not reports:
+        if owns_client:
+            await client.aclose()
         raise BizError("multi_all_failed", "全部助理质检失败，未生成任何报告，请检查模型配置后重试", status_code=400)
     # ④ 总览（LLM 一次汇总；失败规则降级）
     overview = await generate_overview(session, reports, result.raw_text, title, conversation_id, client, cfg)
+    if owns_client:
+        await client.aclose()
     return {
         "conversation_id": conversation_id,
         "overview_id": overview.id,

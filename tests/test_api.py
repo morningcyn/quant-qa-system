@@ -198,6 +198,98 @@ class TestMultiBatchApi:
 
 
 class TestSettingsApi:
+    def test_database_backup_endpoint(self, client, monkeypatch, tmp_path):
+        from backend.api import settings as settings_api
+
+        backup_path = tmp_path / "app-test.db"
+        backup_path.write_bytes(b"backup")
+        monkeypatch.setattr(settings_api.db_backup, "create_backup", lambda: backup_path)
+
+        resp = client.post("/api/settings/database/backup")
+
+        assert resp.status_code == 200
+        assert resp.json() == {
+            "filename": "app-test.db",
+            "path": str(backup_path),
+            "size": 6,
+        }
+
+    def test_database_restore_requires_explicit_confirmation(self, client):
+        resp = client.post(
+            "/api/settings/database/restore",
+            json={"filename": "app-test.db", "confirm": False},
+        )
+
+        assert resp.status_code == 400
+        assert resp.json()["code"] == "confirmation_required"
+
+    def test_database_restore_endpoint_returns_restart_notice(self, client, monkeypatch, tmp_path):
+        from backend.api import settings as settings_api
+
+        restored_path = tmp_path / "app-source.db"
+        safety_path = tmp_path / "app-safety.db"
+        monkeypatch.setattr(
+            settings_api.db_backup,
+            "restore_backup",
+            lambda filename: (restored_path, safety_path),
+        )
+
+        resp = client.post(
+            "/api/settings/database/restore",
+            json={"filename": "app-source.db", "confirm": True},
+        )
+
+        assert resp.status_code == 200
+        assert resp.json() == {
+            "restored_from": "app-source.db",
+            "safety_backup": "app-safety.db",
+            "restart_required": True,
+        }
+
+    def test_database_integrity_and_backup_list_endpoints(self, client, monkeypatch):
+        from backend.api import settings as settings_api
+
+        monkeypatch.setattr(
+            settings_api.db_backup,
+            "inspect_database",
+            lambda: {"ok": True, "integrity_check": "ok", "foreign_key_violations": [], "error": None},
+        )
+        monkeypatch.setattr(
+            settings_api.db_backup,
+            "list_backups",
+            lambda: [{"filename": "app-test.db", "valid": True}],
+        )
+
+        integrity = client.get("/api/settings/database/integrity")
+        backups = client.get("/api/settings/database/backups")
+
+        assert integrity.status_code == 200
+        assert integrity.json()["ok"] is True
+        assert backups.status_code == 200
+        assert backups.json()["items"][0]["filename"] == "app-test.db"
+
+    def test_database_backup_cleanup_requires_confirmation(self, client):
+        resp = client.post("/api/settings/database/backups/cleanup", json={"confirm": False})
+
+        assert resp.status_code == 400
+        assert resp.json()["code"] == "confirmation_required"
+
+    def test_database_backup_cleanup_preview_and_confirmed_cleanup(self, client, monkeypatch):
+        from backend.api import settings as settings_api
+
+        preview = {"deletable_count": 1, "candidates": [{"filename": "app-old.db"}]}
+        result = {"deleted_count": 1, "failed_count": 0, "deleted": preview["candidates"], "failed": [], "remaining": []}
+        monkeypatch.setattr(settings_api.db_backup, "plan_backup_cleanup", lambda: preview)
+        monkeypatch.setattr(settings_api.db_backup, "cleanup_backups", lambda confirm: result)
+
+        preview_resp = client.get("/api/settings/database/backups/cleanup-preview")
+        cleanup_resp = client.post("/api/settings/database/backups/cleanup", json={"confirm": True})
+
+        assert preview_resp.status_code == 200
+        assert preview_resp.json()["deletable_count"] == 1
+        assert cleanup_resp.status_code == 200
+        assert cleanup_resp.json()["deleted_count"] == 1
+
     def test_model_lifecycle_masked(self, client):
         resp = client.post(
             "/api/settings/models",

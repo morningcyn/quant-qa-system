@@ -272,6 +272,165 @@
     });
   }
 
+  // ---------- 数据库备份 ----------
+
+  function formatBytes(size) {
+    if (size < 1024) return `${size} B`;
+    if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+    return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
+  function backupStatus(item) {
+    if (item.valid) return `<span class="badge badge-good">有效</span>`;
+    return `<span class="badge badge-critical">无效</span>`;
+  }
+
+  function renderCleanupPreview(container, preview) {
+    const candidates = preview.candidates || [];
+    container.innerHTML = `
+      <div class="backup-preview ${candidates.length ? "has-candidates" : "is-safe"}">
+        <div class="backup-preview-head">
+          <b>${candidates.length ? `发现 ${candidates.length} 个可清理备份` : "当前没有需要清理的备份"}</b>
+          <span class="muted">保留最近 ${preview.policy.keep_count} 个，并保留最近 ${preview.policy.keep_days} 天</span>
+        </div>
+        ${candidates.length ? `
+          <div class="backup-preview-list">
+            ${candidates.map((item) => `
+              <div class="backup-row">
+                <span>${UI.esc(item.filename)}</span>
+                <span class="muted">${UI.esc(UI.fmtDate(item.modified_at))} · ${formatBytes(item.size)}</span>
+              </div>`).join("")}
+          </div>
+          <div class="form-hint">仅列出有效且超出保留策略的备份，损坏备份不会被自动删除。</div>` : `
+          <div class="form-hint">当前共有 ${preview.valid_count} 个有效备份、${preview.invalid_count} 个无效备份，均在保留范围内。</div>`}
+      </div>`;
+  }
+
+  async function loadCleanupPreview(body) {
+    const previewBox = body.querySelector("#backup-cleanup-preview");
+    const cleanupBtn = body.querySelector("#btn-cleanup-backups");
+    if (!previewBox) return;
+    previewBox.innerHTML = `<div class="muted"><span class="spinner" style="width:12px;height:12px;border-width:1.5px"></span> 正在计算清理范围…</div>`;
+    if (cleanupBtn) cleanupBtn.disabled = true;
+    try {
+      const preview = await API.get("/api/settings/database/backups/cleanup-preview");
+      renderCleanupPreview(previewBox, preview);
+      if (cleanupBtn) {
+        cleanupBtn.disabled = !preview.deletable_count;
+        cleanupBtn.dataset.candidates = String(preview.deletable_count || 0);
+      }
+    } catch (err) {
+      previewBox.innerHTML = `<div class="alert alert-warning">${UI.esc((err && err.message) || "清理预览加载失败")}</div>`;
+    }
+  }
+
+  async function refreshDatabaseTab() {
+    const body = document.querySelector("#tab-database");
+    if (!body) return;
+    body.innerHTML = `<div class="card"><div class="muted"><span class="spinner" style="width:12px;height:12px;border-width:1.5px"></span> 正在加载数据库状态…</div></div>`;
+    try {
+      const [integrity, backupData] = await Promise.all([
+        API.get("/api/settings/database/integrity"),
+        API.get("/api/settings/database/backups"),
+      ]);
+      renderDatabase(body, integrity, backupData.items || []);
+      loadCleanupPreview(body);
+    } catch (err) {
+      body.innerHTML = `<div class="alert alert-warning">${UI.esc((err && err.message) || "数据库状态加载失败")}</div>`;
+    }
+  }
+
+  function renderDatabase(body, integrity, backups) {
+    const violations = integrity.foreign_key_violations || [];
+    const integrityOk = integrity.ok;
+    body.innerHTML = `
+      <div class="card database-card">
+        <div class="database-head">
+          <div>
+            <div class="card-title">数据库备份管理</div>
+            <div class="muted">检查数据库一致性、创建备份，并按保留策略清理旧备份。</div>
+          </div>
+          <div class="database-actions">
+            <button class="btn btn-sm btn-ghost" id="btn-refresh-database">刷新</button>
+            <button class="btn btn-sm btn-primary" id="btn-create-backup">立即备份</button>
+          </div>
+        </div>
+        <div class="database-status ${integrityOk ? "is-ok" : "is-warning"}">
+          <span class="status-dot ${integrityOk ? "ok" : "failed"}"></span>
+          <div>
+            <b>${integrityOk ? "数据库检查正常" : "数据库存在一致性问题"}</b>
+            <div class="muted">完整性检查：${UI.esc(integrity.integrity_check || "无法执行") } · 外键问题：${violations.length}</div>
+            ${integrity.error ? `<div class="form-hint">${UI.esc(integrity.error)}</div>` : ""}
+          </div>
+        </div>
+      </div>
+
+      <div class="card database-card">
+        <div class="database-head">
+          <div>
+            <div class="card-title">备份文件（${backups.length}）</div>
+            <div class="muted">无效备份仅提示，不会被自动清理。</div>
+          </div>
+        </div>
+        <div class="backup-list">
+          ${backups.length ? backups.map((item) => `
+            <div class="backup-row">
+              <div class="backup-file">
+                ${backupStatus(item)}
+                <span>${UI.esc(item.filename)}</span>
+              </div>
+              <span class="muted">${UI.esc(UI.fmtDate(item.modified_at))} · ${formatBytes(item.size)}</span>
+            </div>`).join("") : `<div class="empty" style="padding:20px">暂无备份文件，点击“立即备份”创建第一份备份。</div>`}
+        </div>
+      </div>
+
+      <div class="card database-card">
+        <div class="database-head">
+          <div>
+            <div class="card-title">清理旧备份</div>
+            <div class="muted">先预览候选文件，确认后才会删除。</div>
+          </div>
+          <div class="database-actions">
+            <button class="btn btn-sm btn-ghost" id="btn-preview-backups">刷新预览</button>
+            <button class="btn btn-sm btn-danger" id="btn-cleanup-backups" disabled>确认清理</button>
+          </div>
+        </div>
+        <div id="backup-cleanup-preview"></div>
+      </div>`;
+
+    body.querySelector("#btn-refresh-database").addEventListener("click", refreshDatabaseTab);
+    body.querySelector("#btn-create-backup").addEventListener("click", async (event) => {
+      event.currentTarget.disabled = true;
+      try {
+        const result = await API.post("/api/settings/database/backup");
+        UI.toast(`备份已创建：${result.filename}`, "success");
+        refreshDatabaseTab();
+      } catch (err) {
+        UI.handleError(err, "备份创建失败");
+      } finally {
+        event.currentTarget.disabled = false;
+      }
+    });
+    body.querySelector("#btn-preview-backups").addEventListener("click", () => loadCleanupPreview(body));
+    body.querySelector("#btn-cleanup-backups").addEventListener("click", async (event) => {
+      const count = Number(event.currentTarget.dataset.candidates || 0);
+      if (!count) {
+        UI.toast("当前没有可清理的备份", "info");
+        return;
+      }
+      if (!confirm(`确定清理预览中的 ${count} 个旧备份吗？此操作不可撤销。`)) return;
+      event.currentTarget.disabled = true;
+      try {
+        const result = await API.post("/api/settings/database/backups/cleanup", { confirm: true });
+        UI.toast(`已清理 ${result.deleted_count} 个备份`, result.failed_count ? "warning" : "success");
+        refreshDatabaseTab();
+      } catch (err) {
+        UI.handleError(err, "备份清理失败");
+        event.currentTarget.disabled = false;
+      }
+    });
+  }
+
   // ---------- 关于 ----------
 
   async function refreshAboutTab() {
@@ -320,10 +479,12 @@
           <div class="tabs">
             <span class="tab active" data-tab="models">我的模型</span>
             <span class="tab" data-tab="templates">质检模板</span>
+            <span class="tab" data-tab="database">数据库</span>
             <span class="tab" data-tab="about">关于</span>
           </div>
           <div id="tab-models"></div>
           <div id="tab-templates" style="display:none"></div>
+          <div id="tab-database" style="display:none"></div>
           <div id="tab-about" style="display:none"></div>
         </div>`;
       app.querySelectorAll(".tab").forEach((tab) => {
@@ -331,10 +492,11 @@
           app.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
           tab.classList.add("active");
           const key = tab.dataset.tab;
-          ["models", "templates", "about"].forEach((k) => {
+          ["models", "templates", "database", "about"].forEach((k) => {
             document.getElementById(`tab-${k}`).style.display = k === key ? "" : "none";
           });
           if (key === "templates") refreshTemplatesTab();
+          if (key === "database") refreshDatabaseTab();
           if (key === "about") refreshAboutTab();
         });
       });

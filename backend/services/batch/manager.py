@@ -5,6 +5,7 @@
 import asyncio
 import json
 import logging
+import weakref
 from datetime import timedelta
 
 from sqlalchemy.orm import Session
@@ -36,8 +37,19 @@ MAX_ATTEMPTS = 3
 class BatchTaskManager:
     """批量评分任务管理器：全局并发上限 Semaphore(3)，每任务独立 SessionLocal。"""
 
-    _sem = asyncio.Semaphore(3)
+    MAX_CONCURRENT_TASKS = 3
+    _semaphores = weakref.WeakKeyDictionary()
     _workers: dict[str, asyncio.Task] = {}
+
+    @classmethod
+    def _get_semaphore(cls) -> asyncio.Semaphore:
+        """Return the concurrency limiter belonging to the current event loop."""
+        loop = asyncio.get_running_loop()
+        semaphore = cls._semaphores.get(loop)
+        if semaphore is None:
+            semaphore = asyncio.Semaphore(cls.MAX_CONCURRENT_TASKS)
+            cls._semaphores[loop] = semaphore
+        return semaphore
 
     def start_batch(self, batch_id: str) -> bool:
         """幂等启动：已有活跃 worker 或批次已全部完成 → False。"""
@@ -98,7 +110,8 @@ class BatchTaskManager:
                 if task is None:
                     return
                 try:
-                    result_json = await self._execute(session, task)
+                    async with self._get_semaphore():
+                        result_json = await self._execute(session, task)
                 except (BizError, LLMError) as exc:
                     code, message = exc.code, exc.message
                     if code in FATAL_CODES:
@@ -131,6 +144,20 @@ class BatchTaskManager:
             await asyncio.sleep(delay)
 
     async def _execute(self, session: Session, task) -> dict:
+        owned_client = None
+
+        def load_runtime():
+            nonlocal owned_client
+            owned_client, cfg = factory.get_active_runtime(session)
+            return owned_client, cfg
+
+        try:
+            return await self._execute_with_client(session, task, load_runtime)
+        finally:
+            if owned_client is not None:
+                await owned_client.aclose()
+
+    async def _execute_with_client(self, session: Session, task, load_runtime) -> dict:
         """评分一个客户会话：重建消息 → 执行时员工匹配 → 每助理（簇）chunk 评分 → 落库。"""
         data = json.loads(task.input_data)
         msgs = [dict_to_message(m) for m in data.get("messages", [])]
@@ -152,7 +179,7 @@ class BatchTaskManager:
                 "请先在「员工档案」创建对应员工，再点「重新评分失败任务」",
             )
         # ③ LLM 运行时（not_configured → 致命）
-        client, cfg = factory.get_active_runtime(session)
+        client, cfg = load_runtime()
         chunk_params = repository.get_setting_json(session, "batch_chunk_params") or {}
         title = data.get("title")
         reports: list[dict] = []
@@ -224,7 +251,7 @@ class BatchTaskManager:
             "overview_id": overview_id,
             "emotion_id": emotion_id,
         }
-
+        client, cfg = load_runtime()
     async def _score_one_cluster(self, session, assistant, cluster, client, cfg, title, chunk_params, batch_id) -> dict:
         """单助理（簇）：切 chunk → 评分/汇总 → 落库（conversation_id=batch_id，与多人质检同一锚点）。"""
         segment = cluster.segment

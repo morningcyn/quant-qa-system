@@ -1,5 +1,7 @@
 # 批量评分管理：状态机 / 重试 / 员工匹配 / 断点续跑 / 汇总降级
 import json
+import asyncio
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import create_engine
@@ -87,6 +89,71 @@ def task_status(factory, batch_id, task_id="task_001"):
 
 
 class TestBatchTaskManager:
+    def test_task_execution_respects_global_concurrency_limit(self, monkeypatch):
+        active = 0
+        max_active = 0
+        tasks = {
+            ("b_limit", f"task_{i:03d}"): SimpleNamespace(retry_count=0)
+            for i in range(6)
+        }
+
+        class FakeSession:
+            def close(self):
+                pass
+
+        async def fake_execute(session, task):
+            nonlocal active, max_active
+            active += 1
+            max_active = max(max_active, active)
+            await asyncio.sleep(0.01)
+            active -= 1
+            return {}
+
+        monkeypatch.setattr(mgr_mod, "SessionLocal", FakeSession)
+        monkeypatch.setattr(
+            mgr_mod.brepo,
+            "get_task",
+            lambda session, batch_id, task_id: tasks[(batch_id, task_id)],
+        )
+        monkeypatch.setattr(mgr_mod.brepo, "set_task_status", lambda *args, **kwargs: None)
+        monkeypatch.setattr(mgr, "_execute", fake_execute)
+
+        async def run_tasks():
+            await asyncio.gather(
+                *(
+                    mgr._run_task(SimpleNamespace(batch_id="b_limit", task_id=f"task_{i:03d}"))
+                    for i in range(6)
+                )
+            )
+
+        asyncio.run(run_tasks())
+
+        assert max_active == mgr.MAX_CONCURRENT_TASKS
+
+    def test_task_execution_closes_owned_llm_client(self, env, monkeypatch):
+        class ClosingClient(MockLLMClient):
+            def __init__(self):
+                super().__init__([valid_llm_json()])
+                self.closed = False
+
+            async def aclose(self):
+                self.closed = True
+
+        client = ClosingClient()
+        batch_id, _ = make_batch(
+            env,
+            THREE_LINE,
+            employees=[("段勇亮", "E003")],
+            name_map={"韩珂龙头班": "段勇亮"},
+        )
+        mock_runtime(monkeypatch, client)
+        with env() as s:
+            task = brepo.list_tasks(s, batch_id)[0]
+
+        asyncio.run(mgr._run_task(task))
+
+        assert client.closed is True
+
     def test_happy_path_completed(self, env, monkeypatch):
         """happy path：任务 completed、报告落库、conversation_id=batch_id。"""
         factory = env

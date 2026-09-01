@@ -47,3 +47,12 @@ class ModelConfigIn(BaseModel):
 class TemplateIn(BaseModel):
     name: str = ""
     config: dict
+
+
+class DatabaseRestoreIn(BaseModel):
+    filename: str = Field(min_length=1, max_length=255)
+    confirm: bool = False
+
+
+class DatabaseBackupCleanupIn(BaseModel):
+    confirm: bool = False
