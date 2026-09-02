@@ -1,0 +1,21 @@
+# Local secrets and configuration overrides
+.env
+.env.*
+!.env.example
+config.local.py
+backend/config.local.py
+
+# Runtime databases and SQLite WAL files
+data/*.db
+data/*.db-wal
+data/*.db-shm
+dist/data/*.db
+dist/data/*.db-wal
+dist/data/*.db-shm
+
+# Python and test runtime artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.log
+errors.log

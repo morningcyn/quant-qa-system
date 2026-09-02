@@ -72,12 +72,12 @@ def main() -> int:
     r = c.post("/api/settings/models", json={
         "name": "E2E模型", "protocol": "openai_compat",
         "base_url": "https://api.deepseek.com/v1",
-        "api_key": "sk-e2e-secret-123", "model_name": "deepseek-chat", "temperature": 0.2,
+        "api_key": "test-api-key-e2e", "model_name": "deepseek-chat", "temperature": 0.2,
     })
-    check("保存模型(密钥不回落)", r.status_code == 201 and "sk-e2e-secret-123" not in r.text)
+    check("保存模型(密钥不回落)", r.status_code == 201 and "test-api-key-e2e" not in r.text)
     mid = r.json()["id"]
     r = c.get("/api/settings/models")
-    check("密钥掩码", "sk-e2e-secret-123" not in r.text and r.json()["models"][0]["has_api_key"])
+    check("密钥掩码", "test-api-key-e2e" not in r.text and r.json()["models"][0]["has_api_key"])
     r = c.post(f"/api/settings/models/{mid}/test")
     print(f"  [INFO] 连通测试(假Key): ok={r.json()['ok']} message={r.json()['message']}")
     check("连通测试返回结构", r.status_code == 200 and "ok" in r.json() and r.json()["ok"] is False)

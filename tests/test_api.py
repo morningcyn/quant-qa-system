@@ -297,18 +297,18 @@ class TestSettingsApi:
                 "name": "DeepSeek",
                 "protocol": "openai_compat",
                 "base_url": "https://api.deepseek.com/v1",
-                "api_key": "sk-secret-123",
+                "api_key": "test-api-key-123",
                 "model_name": "deepseek-chat",
                 "temperature": 0.2,
             },
         )
         assert resp.status_code == 201
         saved = resp.json()
-        assert "sk-secret-123" not in resp.text
+        assert "test-api-key-123" not in resp.text
         assert saved["has_api_key"] is True
         model_id = saved["id"]
         resp = client.get("/api/settings/models")
-        assert "sk-secret-123" not in resp.text
+        assert "test-api-key-123" not in resp.text
         assert resp.json()["active_model_id"] == model_id  # 首个自动设为默认
         # 编辑留空 key = 保留旧密钥
         resp = client.post(
